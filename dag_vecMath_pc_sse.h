@@ -31,7 +31,11 @@
 #else
 #include <emmintrin.h>
 #if _TARGET_PC_MACOSX
-  #include <pmmintrin.h>
+#include <pmmintrin.h>
+#else
+#ifdef __GNUC__
+#include <x86intrin.h> // MAC GCC
+#endif
 #endif
 #endif
 
@@ -84,6 +88,8 @@ VECMATH_FINLINE vec4f VECTORCALL v_ldu_half(const void *m) { return v_cast_vec4f
 VECMATH_FINLINE vec4i VECTORCALL v_cvt_ush_vec4i(vec4i a) { return _mm_unpacklo_epi16(a, _mm_setzero_si128()); }
 VECMATH_FINLINE vec4i VECTORCALL
   v_cvt_ssh_vec4i(vec4i a) { vec4i sx = _mm_cmplt_epi16(a, _mm_setzero_si128()); return _mm_unpacklo_epi16(a, sx); }
+
+VECMATH_FINLINE vec4i VECTORCALL v_cvt_byte_vec4i(vec4i a) { return _mm_unpacklo_epi8(a, _mm_setzero_si128()); }
 
 VECMATH_FINLINE vec4f VECTORCALL v_make_vec4f(float x, float y, float z, float w)
 { return _mm_setr_ps(x, y, z, w); }
@@ -257,6 +263,9 @@ VECMATH_FINLINE vec4i VECTORCALL v_packus(vec4i a) { return sse4_packus(a); }
 VECMATH_FINLINE vec4i VECTORCALL v_packus(vec4i a, vec4i b) { return sse2_packus(a, b); }
 VECMATH_FINLINE vec4i VECTORCALL v_packus(vec4i a) { return sse2_packus(a); }
 #endif
+
+VECMATH_FINLINE vec4i VECTORCALL v_packus16(vec4i a, vec4i b) { return _mm_packus_epi16(a,b); }
+VECMATH_FINLINE vec4i VECTORCALL v_packus16(vec4i a) { _mm_packus_epi16(a,a); }
 
 VECMATH_FINLINE vec4f VECTORCALL v_rcp_est(vec4f a) { return _mm_rcp_ps(a); }
 VECMATH_FINLINE vec4f VECTORCALL v_rcp(vec4f a)
