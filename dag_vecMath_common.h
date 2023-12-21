@@ -91,7 +91,7 @@ VECTORCALL VECMATH_FINLINE vec4f v_mod(vec4f a, vec4f aDiv)
   return r;
 }
 
-VECTORCALL VECMATH_FINLINE quat4f v_lerp_vec4f(vec4f tttt, quat4f a, quat4f b)
+VECTORCALL VECMATH_FINLINE vec4f v_lerp_vec4f(vec4f tttt, vec4f a, vec4f b)
 {
   return v_madd(v_sub(b, a), tttt, a);
 }
@@ -1344,6 +1344,25 @@ VECTORCALL inline vec3f v_euler_from_quat(quat4f quat)
   vec4f angles = v_atan2(x, y);
   vec4f specialAngles = v_perm_xycd(v_or(v_perm_xaxa(v_add_x(angles, angles), V_C_HALFPI), testSign), v_zero());
   return v_sel(angles, specialAngles, specialCase);
+}
+
+VECTORCALL inline quat4f v_quat_slerp(vec4f t, quat4f a, quat4f b)
+{
+  vec4f f = v_dot4(a, b);
+  vec4f absF = v_abs(f);
+  if (v_test_vec_x_ge(absF, v_set_x(0.9999f)))
+  {
+    vec4f p = v_add(a, v_mul(v_sub(b, a), t));
+    vec4f n = v_msub(v_add(a, b), t, a);
+    return v_norm4(v_sel(p, n, v_cmp_lt(f, v_zero())));
+  }
+  b = v_xor(b, v_and(f, v_msbit()));
+  vec4f w = v_acos(absF);
+  vec4f invsinw = v_rsqrt4(v_sub(V_C_ONE, v_sqr(f)));
+  vec4f s = v_sin(v_mul(w, v_perm_xyab(v_sub(V_C_ONE, t), t)));
+  vec4f l = v_mul(a, v_splat_x(s));
+  vec4f r = v_mul(b, v_splat_z(s));
+  return v_mul(v_add(l, r), invsinw);
 }
 
 VECTORCALL VECMATH_FINLINE quat4f v_quat_qslerp(float t, quat4f l, quat4f r)
