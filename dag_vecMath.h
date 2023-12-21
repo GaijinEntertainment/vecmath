@@ -286,7 +286,7 @@ VECTORCALL VECMATH_FINLINE vec4i v_absi(vec4i a);
 VECTORCALL VECMATH_FINLINE vec4f v_is_unsafe_divisor(vec4f a);
 
 //! LERP a to b using parameter tttt
-VECTORCALL VECMATH_FINLINE quat4f v_lerp_vec4f(vec4f tttt, quat4f a, quat4f b);
+VECTORCALL VECMATH_FINLINE vec4f v_lerp_vec4f(vec4f tttt, vec4f a, vec4f b);
 
 //! (a + b)
 VECTORCALL VECMATH_FINLINE vec4i v_addi(vec4i a, vec4i b);
@@ -994,6 +994,8 @@ VECTORCALL inline vec3f v_euler_from_quat(quat4f quat);
 
 //! linear interpolation between normalized quaternions using parameter tttt
 VECTORCALL VECMATH_FINLINE quat4f v_quat_lerp(vec4f tttt, quat4f a, quat4f b);
+//! spherical interpolation between normalized quaternions
+VECTORCALL VECMATH_FINLINE quat4f v_quat_slerp(vec4f t, quat4f a, quat4f b);
 //! fast quasi-spherical linear interpolation between normalized quaternions
 VECTORCALL VECMATH_FINLINE quat4f v_quat_qslerp(float t, quat4f a, quat4f b);
 //! fast quasi-spherical quadrangle interpolation between normalized quaternions
