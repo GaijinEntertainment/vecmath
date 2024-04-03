@@ -52,8 +52,23 @@
 #define _ATAN_EST_S2        0.68193064729268275701e1f
 #define _ATAN_EST_S3        0.28205206687035841409e2f
 
+VECTORCALL VECMATH_FINLINE vec4f v_deg_to_rad(vec4f deg)
+{
+  return v_mul(deg, v_splats(float(M_PI / 180.0)));
+}
+
+VECTORCALL VECMATH_FINLINE vec4f v_rad_to_deg(vec4f rad)
+{
+  return v_mul(rad, v_splats(float(180.0 / M_PI)));
+}
+
+VECTORCALL VECMATH_FINLINE vec4f v_norm_s_angle(vec4f angle)
+{
+  return v_sub(angle, v_mul(v_floor(v_mul(v_add(angle, V_C_PI), v_rcp(V_C_TWOPI))), V_C_TWOPI));
+}
+
 // calculates 4 in ~2.14x speed of win libc implementation for 1, with same precision
-VECTORCALL VECMATH_FINLINE void v_sincos4(vec4f ang, vec4f& s, vec4f& c)
+VECTORCALL VECMATH_FINLINE void v_sincos(vec4f ang, vec4f& s, vec4f& c)
 {
   vec4f xl, xl2, xl3;
   vec4i q;
@@ -100,7 +115,7 @@ VECTORCALL VECMATH_FINLINE void v_sincos4(vec4f ang, vec4f& s, vec4f& c)
 VECTORCALL VECMATH_FINLINE vec4f v_sin(vec4f ang)
 {
   vec4f s, c;
-  v_sincos4(ang, s, c);
+  v_sincos(ang, s, c);
   return s;
 }
 
@@ -108,7 +123,7 @@ VECTORCALL VECMATH_FINLINE vec4f v_sin(vec4f ang)
 VECTORCALL VECMATH_FINLINE vec4f v_cos(vec4f ang)
 {
   vec4f s, c;
-  v_sincos4(ang, s, c);
+  v_sincos(ang, s, c);
   return c;
 }
 
@@ -159,7 +174,7 @@ VECTORCALL VECMATH_FINLINE vec4f v_asin(vec4f ang)
   vec4f cmp = v_cmp_ge(x, V_C_HALF);
 
   vec4f z1 = v_mul(V_C_HALF, v_sub(V_C_ONE, x));
-  vec4f x1 = v_sqrt4(z1);
+  vec4f x1 = v_sqrt(z1);
   vec4f z2 = v_mul(x, x);
 
   vec4f z = v_sel(z2, z1, cmp);
@@ -192,7 +207,7 @@ VECTORCALL VECMATH_FINLINE vec4f v_acos(vec4f ang)
   x1 = v_and(polyMask1, x1);
   x2 = v_and(polyMask2, x2);
   vec4f x = v_or(x1, x2);
-  x = v_sqrt4(v_mul(V_C_HALF, x));
+  x = v_sqrt(v_mul(V_C_HALF, x));
 
   vec4f polyMask3 = v_or(polyMask1, polyMask2);
   vec4f x3 = v_andnot(polyMask3, ang);
@@ -333,7 +348,7 @@ VECTORCALL VECMATH_INLINE  vec4f v_atan2_est(vec4f y, vec4f x)
 
 VECTORCALL VECMATH_FINLINE void v_sincos_x(vec4f ang, vec4f& s, vec4f& c)
 {
-  v_sincos4(ang, s, c);
+  v_sincos(ang, s, c);
 }
 
 VECTORCALL VECMATH_FINLINE vec4f v_sin_x(vec4f ang)
