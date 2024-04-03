@@ -53,7 +53,6 @@ VECTORCALL VECMATH_FINLINE vec4i v_zeroi() { return _mm_setzero_si128(); }
 VECTORCALL VECMATH_FINLINE vec4f v_set_all_bits() { vec4f u = _mm_undefined_ps(); return v_cmp_eq(u, u); }
 VECTORCALL VECMATH_FINLINE vec4i v_set_all_bitsi() { vec4i u = _mm_undefined_si128(); return v_cmp_eqi(u, u); }
 VECTORCALL VECMATH_FINLINE vec4f v_msbit() { return (vec4f&)V_CI_SIGN_MASK; }
-VECTORCALL VECMATH_FINLINE vec4f v_splat4(const float *a) { return _mm_load1_ps(a); }
 VECTORCALL VECMATH_FINLINE vec4f v_splats(float a) {return _mm_set1_ps(a);}//_mm_set_ps1(a) is slower...
 VECTORCALL VECMATH_FINLINE vec4i v_splatsi(int a) {return _mm_set1_epi32(a);}
 VECTORCALL VECMATH_FINLINE vec4f v_set_x(float a) {return _mm_set_ss(a);} // set x, zero others
@@ -73,6 +72,10 @@ NO_ASAN_INLINE vec4i v_ldi(const int *m) { return  _mm_load_si128((const vec4i*)
 NO_ASAN_INLINE vec4i v_ldui(const int *m) { return _mm_loadu_si128((const vec4i*)m); }
 NO_ASAN_INLINE vec4f v_ldu_x(const float *m) { return _mm_load_ss(m); } // load x, zero others
 #endif
+
+// Always safe loading of float[3], but it uses one more register and one more memory read (slower)
+NO_ASAN_INLINE vec3f v_ldu_p3_safe(const float *m) { return _mm_movelh_ps(v_ldu_half(m), v_ldu_x(m + 2)); }
+NO_ASAN_INLINE vec4i v_ldui_p3_safe(const int *m) { return _mm_unpacklo_epi64(v_ldui_half(m), v_seti_x(m[2])); }
 
 VECTORCALL VECMATH_FINLINE vec4i v_ldush(const signed short *m)
 {
@@ -485,23 +488,25 @@ VECTORCALL VECMATH_FINLINE vec4i v_muli(vec4i a, vec4i b) { return sse2_muli(a,b
 VECTORCALL VECMATH_FINLINE vec4i v_packus16(vec4i a, vec4i b) { return _mm_packus_epi16(a,b); }
 VECTORCALL VECMATH_FINLINE vec4i v_packus16(vec4i a) { return _mm_packus_epi16(a,a); }
 
-VECTORCALL VECMATH_FINLINE vec4f v_rcp_est(vec4f a) { return _mm_rcp_ps(a); }
-VECTORCALL VECMATH_FINLINE vec4f v_rcp(vec4f a)
+VECTORCALL VECMATH_FINLINE vec4f v_rcp_unprecise(vec4f a) { return _mm_rcp_ps(a); }
+VECTORCALL VECMATH_FINLINE vec4f v_rcp_est(vec4f a)
 {
   __m128 y0 = _mm_rcp_ps(a);
   return _mm_sub_ps(_mm_add_ps(y0, y0), _mm_mul_ps(a, _mm_mul_ps(y0, y0)));
 }
-VECTORCALL VECMATH_FINLINE vec4f v_rcp_est_x(vec4f a) { return _mm_rcp_ss(a); }
-VECTORCALL VECMATH_FINLINE vec4f v_rcp_x(vec4f a)
+VECTORCALL VECMATH_FINLINE vec4f v_rcp_unprecise_x(vec4f a) { return _mm_rcp_ss(a); }
+VECTORCALL VECMATH_FINLINE vec4f v_rcp_est_x(vec4f a)
 {
   __m128 y0 = _mm_rcp_ss(a);
   return _mm_sub_ss(_mm_add_ss(y0, y0), _mm_mul_ss(a, _mm_mul_ss(y0, y0)));
 }
 
-VECTORCALL VECMATH_FINLINE vec4f v_rsqrt4_fast(vec4f a) { return _mm_rsqrt_ps(a); }
-VECTORCALL VECMATH_FINLINE vec4f v_rsqrt4(vec4f a)
+VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_unprecise(vec4f a) { return _mm_rsqrt_ps(a); }
+VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_unprecise_x(vec4f a) { return _mm_rsqrt_ss(a); }
+
+VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_est(vec4f a)
 {
-  vec4f r = v_rsqrt4_fast(a);
+  vec4f r = v_rsqrt_unprecise(a);
   a = v_mul(a, r);
   a = v_mul(a, r);
   a = v_add(a, v_splats(-3.0f));
@@ -509,16 +514,19 @@ VECTORCALL VECMATH_FINLINE vec4f v_rsqrt4(vec4f a)
   return v_mul(a, r);
 }
 
-VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_fast_x(vec4f a) { return _mm_rsqrt_ss(a); }
-VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_x(vec4f a) // Reciprocal square root estimate and 1 Newton-Raphson iteration.
+VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_est_x(vec4f a) // Reciprocal square root estimate and 1 Newton-Raphson iteration.
 {
-  vec4f r = v_rsqrt_fast_x(a);
+  vec4f r = v_rsqrt_unprecise_x(a);
   a = v_mul_x(a, r);
   a = v_mul_x(a, r);
   a = v_add_x(a, v_set_x(-3.0f));
   r = v_mul_x(r, v_set_x(-0.5f));
   return v_mul_x(a, r);
 }
+
+VECTORCALL VECMATH_FINLINE vec4f v_rsqrt(vec4f a) { return v_div(v_sqrt(a), a); }
+VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_x(vec4f a) { return v_div_x(v_sqrt_x(a), a); }
+
 VECTORCALL VECMATH_FINLINE vec4i sse2_mini(vec4i a, vec4i b)
 {
   vec4i cond = v_cmp_gti(a, b);
@@ -600,7 +608,7 @@ VECTORCALL VECMATH_FINLINE vec4f v_abs(vec4f a)
 }
 
 VECTORCALL VECMATH_FINLINE vec4f v_sqrt4_fast(vec4f a) { return _mm_sqrt_ps(a); }
-VECTORCALL VECMATH_FINLINE vec4f v_sqrt4(vec4f a) { return _mm_sqrt_ps(a); }
+VECTORCALL VECMATH_FINLINE vec4f v_sqrt(vec4f a) { return _mm_sqrt_ps(a); }
 VECTORCALL VECMATH_FINLINE vec4f v_sqrt_fast_x(vec4f a) { return _mm_sqrt_ss(a); }
 VECTORCALL VECMATH_FINLINE vec4f v_sqrt_x(vec4f a) { return _mm_sqrt_ss(a); }
 
@@ -805,6 +813,20 @@ VECTORCALL VECMATH_FINLINE vec4f v_norm2(vec4f a) { return v_div(a, v_splat_x(v_
 VECTORCALL VECMATH_FINLINE vec4f v_plane_dist(plane3f a, vec3f b)
 {
   return v_splat_x(v_plane_dist_x(a, b));
+}
+
+VECTORCALL VECMATH_FINLINE void v_mat_33cu_from_mat33(float * __restrict m33, const mat33f& tm)
+{
+#if _TARGET_SIMD_SSE >= 4
+  vec4f v0 = _mm_insert_ps(tm.col0, tm.col1, _MM_MK_INSERTPS_NDX(0, 3, 0));
+  vec4f v1 = v_perm_xyab(v_rot_1(tm.col1), tm.col2);
+#else // _TARGET_SIMD_SSE >= 4
+  vec4f v0 = v_perm_xyzd(tm.col0, v_splat_x(tm.col1));
+  vec4f v1 = v_perm_xyab(v_rot_1(tm.col1), tm.col2);
+#endif // _TARGET_SIMD_SSE >= 4
+  v_stu(m33 + 0, v0);
+  v_stu(m33 + 4, v1);
+  m33[8] = v_extract_z(tm.col2);
 }
 
 VECTORCALL VECMATH_FINLINE void v_mat44_make_from_43ca(mat44f& tm, const float *const __restrict m43)
