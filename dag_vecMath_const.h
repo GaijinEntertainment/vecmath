@@ -1,7 +1,6 @@
 //
-// Dagor Engine 6.5
-// Copyright (C) 2023  Gaijin Games KFT.  All rights reserved
-// (for conditions of use see prog/license.txt)
+// Dagor Engine 6.5 - 1st party libs
+// Copyright (C) Gaijin Games KFT.  All rights reserved.
 //
 #pragma once
 
@@ -116,7 +115,7 @@
   #define V_C_INF             vdupq_n_f32(__builtin_inff())
 
   #define DECL_VECFLOAT4(X,Y,Z,W) (float32x4_t){X,Y,Z,W}
-  #define DECL_VECUINT4(X,Y,Z,W)  (int32x4_t){X,Y,Z,W}
+  #define DECL_VECUINT4(X,Y,Z,W)  (int32x4_t){(int)X,(int)Y,(int)Z,(int)W}
 #elif defined(_MSC_VER)
   #define V_C_INF             vdupq_n_f32(INFINITY)
 
@@ -143,7 +142,7 @@
     __n128 v;
   };
   #define DECL_VECFLOAT4(X,Y,Z,W) vec4f_const_hlp(X,Y,Z,W).v
-  #define DECL_VECUINT4(X,Y,Z,W)  vec4i_const_hlp(X,Y,Z,W).v
+  #define DECL_VECUINT4(X,Y,Z,W)  vec4i_const_hlp((int)X,(int)Y,(int)Z,(int)W).v
 #endif
 
   #define V_C_UNIT_1000       DECL_VECFLOAT4( 1.0f, 0.0f, 0.0f, 0.0f )
