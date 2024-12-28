@@ -75,7 +75,7 @@ NO_ASAN_INLINE vec4f v_ldu_x(const float *m) { return _mm_load_ss(m); } // load 
 // Always safe loading of float[3], but it uses [one more register (on SSE2) and] one more memory read (slower)
 #if _TARGET_SIMD_SSE >= 4
 NO_ASAN_INLINE vec3f v_ldu_p3_safe(const float *m) { return _mm_insert_ps(v_ldu_half(m), v_ldu_x(m + 2), _MM_MK_INSERTPS_NDX(0, 2, 1 << 3)); }
-NO_ASAN_INLINE vec4i v_ldui_p3_safe(const int *m) { return _mm_insert_epi32(v_ldui_half(m), v_seti_x(m[2]), _MM_MK_INSERTPS_NDX(0, 2, 1 << 3)); }
+NO_ASAN_INLINE vec4i v_ldui_p3_safe(const int *m) { return _mm_insert_epi32(v_ldui_half(m), m[2], 2); }
 #else
 NO_ASAN_INLINE vec3f v_ldu_p3_safe(const float *m) { return _mm_movelh_ps(v_ldu_half(m), v_ldu_x(m + 2)); }
 NO_ASAN_INLINE vec4i v_ldui_p3_safe(const int *m) { return _mm_unpacklo_epi64(v_ldui_half(m), v_seti_x(m[2])); }
