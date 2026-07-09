@@ -1,17 +1,8 @@
-# vecmath
-SIMD HAL header-only library
+Maybe add info about read and write ports count? That's why we prefer v_st over v_stu_p3 when possible.
 
-This is one-header-only (it is 7 headers, but you need to include one) Hardware Abstraction Layer over SIMD intrinsics.
+> subnormals: Zen handles them at ~full speed while Intel takes microcode assists in several cases - largely moot for us because we flush denormals to zero (see target hardware)
+Are you sure?
 
-Currently for SSE and NEON only (VMX/VMX128/SPU for PS3/Xbox360 are dropped).
 
-It has been tested on PC, Linux, MacOS, iOS, tvOS, Shield, NSwitch, PlayStation4, Xbox One.
-And with gcc of several versions, VS 2015, VS 2017, VC 2019, VS 2022, clang 3.9+. Visual Studio of earlier versions used to work, but hasn't been tested in a while.
+Our platforms have different calling conventions for vector registers, we may say about it. On linux all xmm are scratch, on windows some registers should not be changed by function. Parameters passing in registers is also different.
 
-Current version relies on alignas C++11 modifier, although it is easy to re-write it old-way (__attribute__ / __declspec(aligned)) if needed.
-
-It works with SSE2 set only, although there are some optimizations for SSSE3/SSE4.1, if they are mandatory (by architecture).
-
-Basic types are - plane, point/vector (vec3f/vec4f, which is same 4-float words), bbox (2 words), mat33 (3 vec3f), mat43, mat44, sphere.
-
-In addition to common HAL over simple arithmetics intrinsics, there are some complex functions such as exp, log, sincos, quaternion interpolation, and frustum visibility.

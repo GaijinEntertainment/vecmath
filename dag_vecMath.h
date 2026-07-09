@@ -459,23 +459,27 @@ VECTORCALL VECMATH_FINLINE vec4f v_hmul(vec4f a);
 //! return x*y*z
 VECTORCALL VECMATH_FINLINE vec4f v_hmul3(vec3f a);
 
-//! 1/sqrt_est(a), very unprecise, fastest available on platform
+//! 1/sqrt_est(a), very unprecise, fastest available on platform (SSE: ~11.9 bits, NEON: ~8 bits precision)
 VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_unprecise(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_unprecise_x(vec4f a);
-//! 1/sqrt_est(a), fast estimate with Newton-Raphson refinement
+//! 1/sqrt_est(a), hardware estimate with N-R refinement, faster than IEEE, useful precision, similar between platforms
 VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_est(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_est_x(vec4f a);
-//! .x = precise 1/sqrt(a)
+//! .x = precise 1/sqrt(a) IEEE-754 precise
 VECTORCALL VECMATH_FINLINE vec4f v_rsqrt(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_x(vec4f a);
+VECTORCALL VECMATH_FINLINE vec4f v_rsqrt_safe(vec4f a, vec4f def);
 
-//! sqrt_est(a), fast estimate
-VECTORCALL VECMATH_FINLINE vec4f v_sqrt4_fast(vec4f a);
-//! sqrt(a), Newton-Raphson refinement
+//! sqrt(a), very unprecise, fastest available on platform (SSE: ~11.9 bits, NEON: ~8 bits precision)
+VECTORCALL VECMATH_FINLINE vec4f v_sqrt_unprecise(vec4f a);
+VECTORCALL VECMATH_FINLINE vec4f v_sqrt_unprecise_x(vec4f a);
+//! sqrt(a), hardware estimate with N-R refinement, faster than IEEE, useful precision, similar between platforms
+//! a=0 returns NaN; use v_sqrt for zero-safe behavior
+VECTORCALL VECMATH_FINLINE vec4f v_sqrt_est(vec4f a);
+VECTORCALL VECMATH_FINLINE vec4f v_sqrt_est_x(vec4f a);
+//! sqrt(a), IEEE-754 precise
 VECTORCALL VECMATH_FINLINE vec4f v_sqrt(vec4f a);
-//! .x = sqrt_est(a.x)
-VECTORCALL VECMATH_FINLINE vec4f v_sqrt_fast_x(vec4f a);
-//! .x = sqrt(a.x)
+//! .x = sqrt(a.x), IEEE-754 precise
 VECTORCALL VECMATH_FINLINE vec4f v_sqrt_x(vec4f a);
 
 //! cyclic rotate
@@ -492,6 +496,7 @@ VECTORCALL VECMATH_FINLINE vec4f v_perm_zwxy(vec4f a); //< alias for v_rot_2()
 VECTORCALL VECMATH_FINLINE vec4f v_perm_wxyz(vec4f a); //< alias for v_rot_3()
 VECTORCALL VECMATH_FINLINE vec4f v_perm_yzxw(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4f v_perm_zxyw(vec4f a);
+VECTORCALL VECMATH_FINLINE vec4f v_perm_yxwz(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4f v_perm_xzxz(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4f v_perm_zxzx(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4f v_perm_xxyy(vec4f a);
@@ -566,6 +571,7 @@ VECTORCALL VECMATH_FINLINE vec4i v_packus16(vec4i a);
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_lo_i8(vec4i a, vec4i b);
 //! interleave high 8 bytes from a,b: {a8,b8,a9,b9,...,a15,b15}
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_hi_i8(vec4i a, vec4i b);
+
 //! interleave low 4 shorts from a,b: {a0,b0,a1,b1,a2,b2,a3,b3}
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_lo_i16(vec4i a, vec4i b);
 //! interleave high 4 shorts from a,b: {a4,b4,a5,b5,a6,b6,a7,b7}
@@ -578,6 +584,12 @@ VECTORCALL VECMATH_FINLINE vec4i v_interleave_hi_i32(vec4i a, vec4i b);
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_lo_i64(vec4i a, vec4i b);
 //! interleave high int64 from a,b: {a1,b1}
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_hi_i64(vec4i a, vec4i b);
+
+//! dynamic byte shuffle (pshufb semantics on all platforms): for each of the
+//! 16 bytes, result[i] = (k[i] & 0x80) ? 0 : t[k[i] & 15]
+VECTORCALL VECMATH_FINLINE vec4i v_perm_i8(vec4i t, vec4i k);
+//! per-byte compare, returns byte mask (0xFF where equal, 0 elsewhere)
+VECTORCALL VECMATH_FINLINE vec4i v_cmp_eqi8(vec4i a, vec4i b);
 
 
 //
@@ -672,6 +684,11 @@ VECTORCALL VECMATH_FINLINE vec3f v_norm3(vec3f a);
 //! normalize: a/length(a), .z, .w could be anything (even NAN). will return NaN for zero vector
 VECTORCALL VECMATH_FINLINE vec4f v_norm2(vec4f a);
 
+//! estimated normalize: a*rsqrt_est(dot), faster and less precise than v_norm*
+VECTORCALL VECMATH_FINLINE vec4f v_norm4_est(vec4f a);
+VECTORCALL VECMATH_FINLINE vec4f v_norm3_est(vec3f a);
+VECTORCALL VECMATH_FINLINE vec4f v_norm2_est(vec4f a);
+
 //! safe normalize: a/length(a), return def value for zero vector
 VECTORCALL VECMATH_FINLINE vec4f v_norm4_safe(vec4f a, vec4f def);
 VECTORCALL VECMATH_FINLINE vec4f v_norm3_safe(vec3f a, vec3f def);
@@ -718,8 +735,6 @@ VECTORCALL VECMATH_FINLINE vec3f v_mat33_mul_vec3(mat33f_cref m, vec3f v);
 VECTORCALL VECMATH_FINLINE vec3f v_mat43_mul_vec3v(mat43f_cref m, vec3f v);
 //! m * v,  matrix is treated row-major, v.w=1
 VECTORCALL VECMATH_FINLINE vec3f v_mat43_mul_vec3p(mat43f_cref m, vec3f v);
-//! scale columns
-VECTORCALL VECMATH_FINLINE void v_mat43_apply_scale(mat44f &m, vec3f scale);
 
   //! transfrom position and apply max scale to radius
 VECTORCALL VECMATH_FINLINE vec4f v_mat44_mul_bsph(mat44f_cref m, vec4f bsph);
@@ -776,18 +791,18 @@ VECTORCALL VECMATH_FINLINE void v_mat33_make_rot_cw_z(mat33f &dest, vec4f ang);
 VECTORCALL VECMATH_FINLINE void v_mat33_make_rot_cw_zyx(mat33f &dest, vec4f ang_xyz);
 
 //! T(m), 4x4 -> 4x4
-VECTORCALL VECMATH_FINLINE void v_mat44_transpose(mat44f &dest, mat44f_cref src);
+VECTORCALL VECMATH_FINLINE void v_mat44_transpose(mat44f &dest, mat44f src);
 VECTORCALL VECMATH_FINLINE void v_mat44_transpose(vec4f &r0, vec4f &r1, vec4f &r2, vec4f &r3);
 //! T(m), 3x3 -> 3x3
 VECTORCALL VECMATH_FINLINE void v_mat33_transpose(mat33f &dest, vec3f src_col0, vec3f src_col1, vec3f src_col2);
 VECTORCALL VECMATH_FINLINE void v_mat33_transpose(mat33f &dest, mat33f_cref src);
-//! T(m), 4x4 -> 3x3, omitting last column. So we can make .w not zero
-//VECTORCALL VECMATH_FINLINE void v_mat44_transpose_to_mat33(mat33f &dest, vec3f col0, vec3f col1, vec3f col2, vec4f col3);
+//! T(m), 4x4 -> 3x3 (transpose of the 3x3 part; last column ignored, .w lanes zeroed)
+VECTORCALL VECMATH_FINLINE void v_mat44_transpose_to_mat33(mat33f &dest, mat44f src);
 
 //! T(m), 4x4 column major -> 4x3 row major
-VECTORCALL VECMATH_FINLINE void v_mat44_transpose_to_mat43(mat43f &dest, mat44f_cref src);
+VECTORCALL VECMATH_FINLINE void v_mat44_transpose_to_mat43(mat43f &dest, mat44f src);
 //! T(m), 4x3 row major -> 4x4 column major
-VECTORCALL VECMATH_FINLINE void v_mat43_transpose_to_mat44(mat44f &dest, mat43f_cref src);
+VECTORCALL VECMATH_FINLINE void v_mat43_transpose_to_mat44(mat44f &dest, mat43f src);
 //! extract rotation/scale transformation from mat44 to mat33
 VECTORCALL VECMATH_FINLINE void v_mat33_from_mat44(mat33f &dest, mat44f_cref m);
 
@@ -843,6 +858,8 @@ VECTORCALL VECMATH_FINLINE void v_mat33_mul33r(mat33f &dest, mat33f_cref m1, mat
 VECTORCALL VECMATH_FINLINE void v_mat44_orthonormalize33(mat44f &dest, mat44f_cref m);
 //! orthonormalize 3x3 matrix
 VECTORCALL VECMATH_FINLINE void v_mat33_orthonormalize(mat33f &dest, mat33f_cref m);
+//! normalize columns of a 3x3 matrix (removes scale, keeps shear)
+VECTORCALL VECMATH_FINLINE void v_mat33_remove_scale(mat33f &dest, mat33f_cref m);
 //! 1/m
 VECTORCALL VECMATH_FINLINE void v_mat44_inverse(mat44f &dest, mat44f_cref m);
 //! 1/m, assuming col1.w=col2.w=col0.w=0, col3=0,0,0,1. Resulting matrix will not conform same assumption (i.e. it will be 43 matrix, not 44)!
@@ -872,7 +889,9 @@ VECTORCALL VECMATH_FINLINE vec4f v_mat44_max_scale43_x(mat44f_cref tm);
 //! .xyz = scales of 3 axes
 VECTORCALL VECMATH_FINLINE vec3f v_mat44_scale43_sq(mat44f_cref tm);
 //! apply scale from .xyz to 3 axes
-VECTORCALL VECMATH_FINLINE void v_mat44_apply_scale43(mat44f &tm, vec3f scale);
+VECTORCALL VECMATH_FINLINE void v_mat44_apply_scale33(mat44f &tm, vec3f scale);
+//! normalize columns 0..2 (removes scale, keeps shear and translation col3)
+VECTORCALL VECMATH_FINLINE void v_mat44_remove_scale33(mat44f &dest, mat44f_cref m);
 
 //! stores mat33f to unaligned Matrix3
 VECTORCALL VECMATH_FINLINE void v_mat_33cu_from_mat33(float * __restrict m33, const mat33f& tm);
@@ -965,15 +984,17 @@ VECTORCALL VECMATH_FINLINE bool v_bbox3_test_box_intersect(bbox3f b1, bbox3f b2)
 //! tests whether boxes intersect and returns boolean (0 or non-0). safe for above case
 VECTORCALL VECMATH_FINLINE bool v_bbox3_test_box_intersect_safe(bbox3f b1, bbox3f b2);
 
-//! tests OBB box1 edges intersect planes of AABB box0 and returns boolean (0 or non-0).
-VECTORCALL inline bool v_bbox3_test_trasformed_box_intersect(bbox3f box0, bbox3f box1, const mat44f& tm1);
+//! tests whether AABB and OBB intersect and returns boolean (0 or non-0)
+VECTORCALL inline bool v_bbox3_test_trasformed_box_intersect(const bbox3f& box0, const bbox3f& box1, const mat44f& tm1);
+//! same as previous, but assumes that boxes already culled by caller and will likely have intersection
+VECTORCALL inline bool v_bbox3_test_trasformed_box_likely_intersect(const bbox3f& box0, const bbox3f& box1, const mat44f& tm1);
 
-//! tests whether OBB box0 and OBB box1 intersect and returns boolean (0 or non-0).
-VECTORCALL VECMATH_FINLINE bool v_bbox3_test_trasformed_box_intersect(bbox3f box0, const mat44f& tm0, bbox3f box1, const mat44f& tm1);
-VECTORCALL VECMATH_FINLINE bool v_bbox3_test_trasformed_box_intersect(bbox3f box0, const mat44f& tm0, bbox3f box1, const mat44f& tm1,
-                                                                      vec4f size_factor);
-VECTORCALL VECMATH_FINLINE bool v_bbox3_test_trasformed_box_intersect_rel_tm(bbox3f box0, const mat44f& b0_to_b1,
-                                                                             bbox3f box1, const mat44f& b1_to_b0);
+//! tests whether OBB box0 and OBB box1 intersect and returns boolean (0 or non-0). size_factor fattens
+//! both boxes. assumes boxes may be far apart: rejects distant pairs by bounding spheres before the test.
+//! tm0 must be invertible (well-conditioned); the test is done in box0's frame via inverse(tm0)*tm1.
+//! callers that pre-culled and have a relative matrix should use the box0/box1/tm1 _likely form instead.
+VECTORCALL VECMATH_FINLINE bool v_bbox3_test_trasformed_box_intersect(bbox3f box0, const mat44f& tm0, bbox3f box1,
+                                                                      const mat44f& tm1, vec4f size_factor = v_splats(1.0f));
 //! get box = box0 & box1
 VECTORCALL VECMATH_FINLINE bbox3f v_bbox3_get_box_intersection(bbox3f box0, bbox3f box1);
 //! tests whether box intersecs sphere and returns boolean
@@ -1056,13 +1077,13 @@ VECTORCALL VECMATH_FINLINE vec4f distance_to_seg_x(vec3f point, vec3f a, vec3f b
 VECTORCALL VECMATH_FINLINE vec3f v_closest_bbox_point(vec3f bmin, vec3f bmax, vec3f c);
 
 //returns 1 if segment with start, start + dir*tmax intersects box
-VECTORCALL VECMATH_INLINE  bool v_test_ray_box_intersection(vec3f start, vec3f dir, vec3f len_x, bbox3f box);
+VECTORCALL VECMATH_FINLINE bool v_test_ray_box_intersection(vec3f start, vec3f dir, vec3f len_x, bbox3f box);
 //same as previous but without support of empty bboxes
-VECTORCALL VECMATH_INLINE  bool v_test_ray_box_intersection_unsafe(vec3f start, vec3f dir, vec3f len_x, bbox3f box);
+VECTORCALL VECMATH_FINLINE bool v_test_ray_box_intersection_unsafe(vec3f start, vec3f dir, vec3f len_x, bbox3f box);
 //returns 1 if segment with start, start + dir*tmax intersects box, tmax will contain distance along ray
-VECTORCALL VECMATH_INLINE  bool v_ray_box_intersection(vec3f start, vec3f dir, vec3f &t_x, bbox3f box);
+VECTORCALL VECMATH_FINLINE bool v_ray_box_intersection(vec3f start, vec3f dir, vec3f &t_x, bbox3f box);
 //same as previous but without support of empty bboxes
-VECTORCALL VECMATH_INLINE  bool v_ray_box_intersection_unsafe(vec3f start, vec3f dir, vec3f &t_x, bbox3f box);
+VECTORCALL VECMATH_FINLINE bool v_ray_box_intersection_unsafe(vec3f start, vec3f dir, vec3f &t_x, bbox3f box);
 //returns 1 if segment with start, start + end intersects box
 VECTORCALL VECMATH_FINLINE bool v_test_segment_box_intersection(vec3f start, vec3f end, bbox3f box);
 
@@ -1077,7 +1098,7 @@ VECTORCALL VECMATH_INLINE  vec4f v_ray_box_intersect_dist_est(vec3f bmin, vec3f 
 // return -1 if no intersection found, or box side index in [0; 5]
 // out_at_min and out_at_max in range [0.0; 1.0] set for closest and furthest intersections
 // compiler didn't calculate 'out_at_max' if it's unused
-VECTORCALL inline int v_segment_box_intersection_side(vec3f start, vec3f end, bbox3f box, float& out_at_min, float& out_at_max);
+VECTORCALL inline int v_segment_box_intersection_side(vec3f start, vec3f end, const bbox3f& box, float& out_at_min, float& out_at_max);
 
 // check ray or segment intersection with sphere
 VECTORCALL VECMATH_FINLINE bool v_test_ray_sphere_intersection(vec3f p0, vec3f dir, vec4f len, vec4f sphere_center, vec4f sphere_r2_x);
