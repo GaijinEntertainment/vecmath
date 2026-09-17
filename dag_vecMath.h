@@ -232,7 +232,7 @@ VECTORCALL VECMATH_FINLINE vec4f v_cast_vec4f(vec4i a);
 //! convert to integer using round-to-zero mode
 VECTORCALL VECMATH_FINLINE vec4i v_cvti_vec4i(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4i v_cvtu_vec4i(vec4f a);//truncates, like the cast. correct for [0, 1<<32); on negative - implementation defined
-//! truncates. out of range and NaN differ per platform (SSE wraps like the scalar cast, NEON saturates), as they do in C
+//! truncates. out of range and NaN differ per platform (SSE wraps like the scalar cast, NEON and wasm saturate), as they do in C
 VECTORCALL VECMATH_FINLINE vec4i v_cvtu_vec4i_ieee(vec4f a);
 VECTORCALL VECMATH_FINLINE vec4i v_cvt_vec4i(vec4f a){return v_cvti_vec4i(a);}
 //! convert to float
@@ -1759,6 +1759,8 @@ VECTORCALL VECMATH_FINLINE vec4d vd_length3_x(vec4d a);
   #include "dag_vecMath_pc_sse.h"
 #elif _TARGET_SIMD_NEON
   #include "dag_vecMath_neon.h"
+#elif _TARGET_SIMD_WASM
+  #include "dag_vecMath_wasm.h"
 #elif _TARGET_SIMD_SCALAR
   #include "dag_vecMath_scalar.h"
 #else

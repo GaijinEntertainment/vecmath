@@ -2,7 +2,7 @@
 
 Rarely used: most engine math is float. `vec4d` keeps `DPoint3` precision for large-world
 coordinates and some physics while vectorizing it. The implementation is `dag_vecMath_double.h`
-(SSE/AVX, NEON and scalar), included through `dag_vecMath.h`; public functions use `vd_`.
+(SSE/AVX, NEON, wasm and scalar), included through `dag_vecMath.h`; public functions use `vd_`.
 
 ## Representation and boundary
 

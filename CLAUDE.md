@@ -1,9 +1,9 @@
 # vecmath: maintainer guide
 
-Platform-abstracted SIMD C API: SSE2/SSSE3/SSE4.1 (x86) and NEON (ARM), with a scalar per-lane
-backend for no-SIMD targets. Engine code outside vecmath still assumes SSE or NEON; validate
-scalar changes with `vecMathUnitTest` (`jam -sVecMathScalar=yes` in
-`prog/samples/unittest/vecMathUnitTest`).
+Platform-abstracted SIMD C API: SSE2/SSSE3/SSE4.1 (x86), NEON (ARM) and WebAssembly SIMD128,
+with a scalar per-lane backend for no-SIMD targets. Engine code outside vecmath still assumes SSE
+or NEON, and no engine build selects wasm; validate scalar changes with `vecMathUnitTest`
+(`jam -sVecMathScalar=yes` in `prog/samples/unittest/vecMathUnitTest`).
 
 ## Read by task
 
@@ -25,10 +25,10 @@ layout choices are costly to retrofit.
 | `dag_vecMathDecl.h` | types, platform detection, alignment |
 | `dag_vecMath.h` | complete platform-independent public API (~650 declarations with comments) |
 | `dag_vecMath_const.h` | constants (`V_C_HALF`, `V_C_ONE`, `V_C_PI`, `V_C_UNIT_1000`, `V_CI_MASK*`, etc.) |
-| `dag_vecMath_pc_sse.h` / `dag_vecMath_neon.h` / `dag_vecMath_scalar.h` | basic SSE / NEON / scalar primitives |
+| `dag_vecMath_pc_sse.h` / `dag_vecMath_neon.h` / `dag_vecMath_wasm.h` / `dag_vecMath_scalar.h` | basic SSE / NEON / wasm SIMD128 / scalar primitives |
 | `dag_vecMath_common.h` | shared bbox, frustum, quaternion and matrix code on the primitives, without hardware intrinsics |
 | `dag_vecMath_trig.h` | polynomial trig approximations |
-| `dag_vecMath_double.h` | `vec4d` for SSE/AVX, NEON and scalar; include it through `dag_vecMath.h` |
+| `dag_vecMath_double.h` | `vec4d` for SSE/AVX, NEON, wasm and scalar; include it through `dag_vecMath.h` |
 | `dag_vecMath_fc16.h` | x86 F16C half/float wrappers that need `<immintrin.h>`; a plain SSE4.1 build includes them only on demand |
 
 Declare each new public function in `dag_vecMath.h` with a comment: callers grep it as the API
@@ -46,8 +46,8 @@ reference.
 - **Mirrors:** mirrored (det < 0) input has one engine-wide convention: decompose and
   quat-from-matrix code flips col2 and folds the negative into `scale.z`. The scale-removal
   primitives stay sign-neutral: do not fold a det test into them.
-- **Cross-platform:** a function added to one ISA path (SSE, NEON, scalar) needs the others, and
-  all paths must agree on results, not only compile.
+- **Cross-platform:** a function added to one ISA path (SSE, NEON, wasm, scalar) needs the others,
+  and all paths must agree on results, not only compile.
 
 ## Implementation rules
 

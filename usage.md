@@ -1,9 +1,10 @@
 # Using vecmath
 
-SIMD C API over SSE2/SSSE3/SSE4.1 and NEON, with a scalar per-lane backend (`_TARGET_SIMD_SCALAR`,
-auto-selected without a SIMD ISA, e.g. Cortex-M or RISC-V without V). `vecMathUnitTest`
-validates it on x64 via `jam -sVecMathScalar=yes`; the rest of the engine still assumes SSE or
-NEON. Vecmath serves transforms, physics, BVH, culling and animation.
+SIMD C API over SSE2/SSSE3/SSE4.1, NEON and WebAssembly SIMD128 (`_TARGET_SIMD_WASM`, selected
+on `__wasm_simd128__`), with a scalar per-lane backend (`_TARGET_SIMD_SCALAR`, auto-selected
+without a SIMD ISA, e.g. Cortex-M or RISC-V without V). `vecMathUnitTest` validates scalar on x64
+via `jam -sVecMathScalar=yes`; the rest of the engine still assumes SSE or NEON, and no engine
+build selects wasm. Vecmath serves transforms, physics, BVH, culling and animation.
 
 `vecmath/dag_vecMath.h` is the complete API reference, with a comment on every `v_` function.
 Grep its families before you hand-roll anything; what you need probably exists: `v_mat44_*`,
@@ -14,8 +15,8 @@ Grep its families before you hand-roll anything; what you need probably exists: 
 
 | Type | Meaning |
 |---|---|
-| `vec4f`/`vec3f` | 128-bit float (`__m128` / `float32x4_t` / 16-byte aligned `float f[4]` struct) |
-| `vec4i` | 128-bit int (`__m128i` / `int32x4_t` / `int32_t i[4]` struct) |
+| `vec4f`/`vec3f` | 128-bit float (`__m128` / `float32x4_t` / clang `float` vector on wasm / 16-byte aligned `float f[4]` struct) |
+| `vec4i` | 128-bit int (`__m128i` / `int32x4_t` / clang `int32_t` vector on wasm / `int32_t i[4]` struct) |
 | `mat33f` / `mat44f` | 3x3 (3 `vec3f`) / 4x4 (4 `vec4f`), column-major |
 | `mat43f` | 4x3 row-major: 3 `vec4f`, each row `xyzw` with the translation in `w` |
 | `bbox3f` / `bsph3f` | AABB `{bmin, bmax}` / `{center.xyz, radius.w}` |
@@ -29,7 +30,7 @@ Double precision (`vec4d`, `vd_`) is a separate, rarely used corner; see `vec4d.
 |---|---|
 | `_x` | only `.x` is defined; `.yzw` can hold anything, even NaN; cheaper than broadcast |
 | `_est` | estimate refined by Newton-Raphson steps; the sequence and count vary by op and ISA, for a similar useful precision. Not an automatic win (`microarch.md`) |
-| `_unprecise` | raw hardware estimate: fastest, least precise |
+| `_unprecise` | raw hardware estimate: fastest, least precise. wasm has no estimate instruction, so there the rcp and rsqrt of both tiers are exact |
 | `_safe` | tolerates zero divisors or page-boundary loads |
 | `_xz` | only `.x` and `.z` are defined; `.y` and `.w` can hold anything (`v_muli_xz`) |
 | `_nz` | the result is not specified in a lane where the sign operand is zero (`v_signi_nz`, `v_signi16_nz`) |
@@ -86,9 +87,9 @@ usually favors SSE and loses on NEON.
   `fminv/fmaxv/sminv/smaxv` and integer `addv` (float `faddv` is SVE-only, so `vaddvq_f32` is an
   `faddp` pair), which several helpers use; the obvious x86 form uses `haddps`, which loses to
   the helpers' explicit shuffle + add. Do not require the same bits across backends: `v_hadd4_x`
-  is `(x+z)+(y+w)` on SSE2 and scalar, `(x+y)+(z+w)` on SSE4.1 and NEON; `v_dot3_x` is `(x+y)+z`
-  on SSE2, NEON and scalar, `(x+z)+y` on SSE4.1. A lane-wise rewrite matches a backend's bits only
-  with that association and unfused mul + add.
+  is `(x+z)+(y+w)` on SSE2, wasm and scalar, `(x+y)+(z+w)` on SSE4.1 and NEON; `v_dot3_x` is
+  `(x+y)+z` on SSE2, NEON, wasm and scalar, `(x+z)+y` on SSE4.1. A lane-wise rewrite matches a
+  backend's bits only with that association and unfused mul + add.
 - **Compare/branch:** prefer `v_check_*`/`v_test_*` to `v_signmask` plus an integer compare. NEON
   has no movemask and emulates it: with current clang, `v_signmask(a)==0b1111` is 10 NEON
   instructions against 5 for `v_check_xyzw_all_true`, and on SSE both are 4. For the bits of a
@@ -123,7 +124,7 @@ usually favors SSE and loses on NEON.
   replacement for them: `v_quat_from_mat33` removes the scale, then flips col2 itself.
 - Matrix destinations can alias inputs (`v_mat44_mul(m, m, rel)`).
 - `v_sel`/`v_seli` read only the sign bit of the selector on every backend (SSE4.1 `blendvps`, a
-  sign-fill shift on SSE2 and NEON, a sign test on scalar), so a sign-only selector works.
+  sign-fill shift on SSE2, NEON and wasm, a sign test on scalar), so a sign-only selector works.
   `v_btsel`/`v_btseli` select per bit: they need canonical all-ones/zero masks (as `v_cmp_*`
   produce), or the result mixes the bits of both inputs.
 - `v_norm*` of a zero or near-zero vector gives inf/NaN; `v_norm*_safe(a, def)` returns `def`
@@ -148,6 +149,8 @@ usually favors SSE and loses on NEON.
   `v_msub` and `v_nmsub` fuse explicitly where the backend can: on NEON `v_madd`/`v_nmsub` are
   `vfmaq_f32`/`vfmsq_f32` (`v_msub` is a mul and a sub), and on x86 they use FMA only when the
   target has it (`__FMA__`, or AVX2 on MSVC). So the SSE4.1 PC build gets mul + add on every CPU.
+  On wasm `v_madd`/`v_nmsub` are `relaxed_madd`/`relaxed_nmadd` only under `-mrelaxed-simd`, and
+  the wasm runtime decides if they fuse.
   FMA rounds once, so a test like `a*b + c*d != 0` can differ between fused and unfused builds,
   and so between platforms.
 - Libs that need cross-ISA consistency (physJolt, gamePhys/collision, landMesh, rendInst, daCSG
@@ -155,13 +158,13 @@ usually favors SSE and loses on NEON.
   (clang-cl through `/clang:`), build with `-fno-unsafe-math-optimizations`, `-ffp-contract=off`
   and on x86 `-mno-fma`. MSVC has none of these flags: the other four keep the default `-fp:fast`;
   daCSG and daSurf build with `-fp:precise` on Windows and Xbox, with either compiler.
-  The define unfuses the explicit FMA of `v_madd` and its siblings on NEON and x86;
+  The define unfuses the explicit FMA of `v_madd` and its siblings on NEON, x86 and wasm;
   the flags stop compiler contraction (`-ffp-contract=off` alone is not enough under fast math).
 - A difference of two products is where contraction bites: fuse one product, and `a*b - b*a`
   returns the rounding error of the other instead of 0. `v_cross3` prevents contraction on every
   build with multiplies that no compiler can fuse (`fmulx` on NEON; on FMA x86, muls that feed
-  `hsubps`, because FMA has no horizontal form): `a x a` is exactly zero, antisymmetry is bitwise,
-  and results match across platforms. Do not rebuild it with `v_nmsub`. Shuffling the products
+  `hsubps`, because FMA has no horizontal form) or under `#pragma clang fp contract(off)` on
+  wasm: `a x a` is exactly zero, antisymmetry is bitwise, and results match across platforms. Do not rebuild it with `v_nmsub`. Shuffling the products
   before the sub does not help: the optimizer moves shuffles across the math and restores the
   fusable form. For `b = s*a` the result is still nonzero, because the products meet
   already-rounded `b` lanes.
@@ -170,7 +173,7 @@ usually favors SSE and loses on NEON.
   differently from the source, and differently between builds and platforms. Do not use compare
   direction to filter NaNs.
 - Denormals flush to zero (x86 FTZ/DAZ, ARM FPCR.FZ): there is no gradual underflow, and the
-  smallest surviving magnitude is `FLT_MIN` (~1.18e-38).
+  smallest surviving magnitude is `FLT_MIN` (~1.18e-38). wasm has no flush mode and keeps them.
 - 32-bit MSVC DEV builds run scalar code on x87 with NaN exceptions enabled; SSE intrinsics keep
   exceptions disabled.
 - Scalar references move with the compiler (SLP, contraction, 32-bit MSVC reassociation;
