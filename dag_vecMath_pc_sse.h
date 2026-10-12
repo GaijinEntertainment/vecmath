@@ -18,7 +18,15 @@
   #endif
 #endif
 
+// <immintrin.h> declares every x86 intrinsic down to the AVX512 family; clang parses it in about
+// 90ms per translation unit against 16ms for the <smmintrin.h> an SSE4.1 target needs, MSVC in
+// about a fifth of that. Take it only where the target compiles an intrinsic above SSE4.1; F16C
+// lives in dag_vecMath_fc16.h so a plain SSE4.1 build never pulls the umbrella just for it.
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__FMA__) || defined(__F16C__)
 #include <immintrin.h>
+#else
+#include <smmintrin.h>
+#endif
 
 #ifdef _MSC_VER
   #pragma warning(push)
@@ -36,7 +44,9 @@
 VECTORCALL VECMATH_FINLINE vec4f v_zero() { return _mm_setzero_ps(); }
 VECTORCALL VECMATH_FINLINE vec4i v_zeroi() { return _mm_setzero_si128(); }
 VECTORCALL VECMATH_FINLINE vec4f v_set_all_bits() { return v_cast_vec4f(v_set_all_bitsi()); }
-VECTORCALL VECMATH_FINLINE vec4i v_set_all_bitsi() { vec4i u = _mm_undefined_si128(); return v_cmp_eqi(u, u); }
+// comparing zero with itself, not _mm_undefined_si128: same instruction out of both compilers
+// (clang pcmpeqd, MSVC a constant load), and it does not drag in the umbrella intrinsic header
+VECTORCALL VECMATH_FINLINE vec4i v_set_all_bitsi() { vec4i z = v_zeroi(); return v_cmp_eqi(z, z); }
 VECTORCALL VECMATH_FINLINE vec4f v_msbit() { return (const vec4f&)V_CI_SIGN_MASK; }
 VECTORCALL VECMATH_FINLINE vec4f v_splats(float a) {return _mm_set1_ps(a);}//_mm_set_ps1(a) is slower...
 VECTORCALL VECMATH_FINLINE vec4i v_splatsi(int a) {return _mm_set1_epi32(a);}
@@ -1341,38 +1351,12 @@ VECTORCALL VECMATH_FINLINE int v_test_vec_x_ge_0(vec3f v) { return v_test_vec_x_
 VECTORCALL VECMATH_FINLINE int v_test_vec_x_lt_0(vec3f v) { return v_test_vec_x_lt(v, v_zero()); }
 VECTORCALL VECMATH_FINLINE int v_test_vec_x_le_0(vec3f v) { return v_test_vec_x_le(v, v_zero()); }
 
-#if (!defined(_TARGET_HAS_FC16) && (_TARGET_PC_WIN || defined(__F16C__) || defined(__AVX2__))) || _TARGET_HAS_FC16
-
-// on _TARGET_PC_WIN v_fc16_* are optionally possible
-
 #if (defined(__F16C__) || defined(__AVX2__)) && !defined(_TARGET_HAS_FC16)
 #define _TARGET_HAS_FC16 1 // target should use v_fc16* intrinsics instead of emulation
 #endif
 
-VECTORCALL VECMATH_FINLINE vec4f v_fc16_half_to_float_lo(vec4i v)
-{
-  return _mm_cvtph_ps(v);
-}
-
-VECTORCALL VECMATH_FINLINE vec4i v_fc16_float_to_half_rtne_lo(vec4f v)
-{
-  return _mm_cvtps_ph(v, _MM_FROUND_TO_NEAREST_INT);
-}
-
-VECTORCALL VECMATH_FINLINE vec4i v_fc16_float_to_half_down_lo(vec4f v)
-{
-  return _mm_cvtps_ph(v, _MM_FROUND_TO_NEG_INF);
-}
-
-VECTORCALL VECMATH_FINLINE vec4i v_fc16_float_to_half_up_lo(vec4f v)
-{
-  return _mm_cvtps_ph(v, _MM_FROUND_TO_POS_INF);
-}
-
-VECTORCALL VECMATH_FINLINE vec4i v_fc16_float_to_half_trunc_lo(vec4f v)
-{
-  return _mm_cvtps_ph(v, _MM_FROUND_TO_ZERO);
-}
+#if _TARGET_HAS_FC16
+#include <vecmath/dag_vecMath_fc16.h>
 #endif
 
 #undef V_SHUFFLE
