@@ -798,6 +798,8 @@ VECTORCALL VECMATH_FINLINE bool v_test_xyzw_nan(vec4f a);
 VECTORCALL VECMATH_FINLINE bool v_test_xyz_nan(vec3f a);
 VECTORCALL VECMATH_FINLINE bool v_test_mat43_nan(mat44f m);
 VECTORCALL VECMATH_FINLINE bool v_test_mat44_nan(mat44f m);
+//! true when .xyz of all 4 columns are finite (no NaN, no Inf); .w is ignored
+VECTORCALL VECMATH_FINLINE bool v_test_mat43_finite(mat44f_cref m);
 //! check for finite value all selected components
 VECTORCALL VECMATH_FINLINE bool v_test_xyzw_finite(vec4f a);
 VECTORCALL VECMATH_FINLINE bool v_test_xyz_finite(vec3f a);
@@ -857,6 +859,16 @@ VECTORCALL VECMATH_FINLINE void v_mat44_ident_swapxz(mat44f &dest);
 VECTORCALL VECMATH_FINLINE void v_mat33_ident(mat33f &dest);
 //! identity matrix 4x4 with swapped X and Z columns
 VECTORCALL VECMATH_FINLINE void v_mat33_ident_swapxz(mat33f &dest);
+//! true when .xyz of all 4 columns equal the 4x3 identity exactly (float ==, so -0 passes);
+//! .w of the columns is ignored
+VECTORCALL VECMATH_FINLINE bool v_mat44_is_ident43(mat44f_cref m);
+//! true when .xyz of all 4 columns of a and b are equal (float ==, so -0 == 0 and NaN fails);
+//! .w of the columns is ignored
+VECTORCALL VECMATH_FINLINE bool v_mat44_is_equal43(mat44f_cref a, mat44f_cref b);
+//! true when .xyz of col0..col2 form an exact signed permutation: every element 0 or +-1 and one
+//! +-1 in each row and column (identity, axis-aligned rotations and reflections); NaN and Inf
+//! fail; .w of the columns and col3 are ignored
+VECTORCALL VECMATH_FINLINE bool v_mat44_is_signed_perm33(mat44f_cref m);
 
 //! make perspective matrix 4x4
 VECTORCALL VECMATH_FINLINE void v_mat44_make_persp_reverse(mat44f &dest, float wk, float hk, float zn, float zf);//zn - 1, zf - 0
@@ -986,6 +998,30 @@ VECTORCALL VECMATH_FINLINE vec4f v_mat33_det(mat33f_cref m);
 VECTORCALL VECMATH_FINLINE vec4f v_mat44_max_scale43_sq(mat44f_cref tm);
 VECTORCALL VECMATH_FINLINE vec4f v_mat44_max_scale43(mat44f_cref tm);
 VECTORCALL VECMATH_FINLINE vec4f v_mat44_max_scale43_x(mat44f_cref tm);
+//! Gram matrix (m^T m) of three columns, held across lanes: diag = the squared column lengths,
+//! off = (c1.c2, c0.c2, c0.c1), each lane the off-diagonal outside its own row, the pairing
+//! v_mat33_gram_bound_x and a symmetric-3x3 determinant's mixed term want; thresholds and
+//! reductions over all three lanes do not care. Sums run (x + z) + y: on SSE4.1 without FMA the
+//! lanes equal v_dot3_x of the column pairs bit for bit. diag.w = 0; off.w is unspecified, so
+//! reduce off with a 3-lane form.
+VECTORCALL VECMATH_FINLINE void v_mat33_gram(vec3f &diag, vec3f &off, vec3f col0, vec3f col1, vec3f col2);
+//! .x = Gershgorin bound on the largest eigenvalue of the Gram matrix above, that is on the
+//! SQUARED spectral norm. Needs off in v_mat33_gram's lane order. Exact for an orthogonal basis,
+//! a few ULP under the true value at worst elsewhere; an overflowed lane reads inf, never NaN.
+VECTORCALL VECMATH_FINLINE vec4f v_mat33_gram_bound_x(vec3f diag, vec3f off);
+//! .x = largest singular value of columns 0..2: the real maximum stretch, shear included, where
+//! v_mat44_max_scale43_x takes the longest column and so under-reads a sheared basis. Needs a
+//! finite basis; under v_is_unsafe_divisor's threshold it falls back to the Frobenius cap 3s, which
+//! is 0 for an all-zero basis. Least accurate where the two largest singular values nearly
+//! coincide: the closed form's acos is steep there and float carries about 1e-4 relative, either
+//! way, so a caller that needs a strict upper bound scales the result up past that.
+VECTORCALL VECMATH_INLINE vec4f v_mat44_spectral_norm43_x(mat44f_cref tm);
+//! .x = an upper bound on the true largest singular value off the Gershgorin row sums of the Gram
+//! matrix, about a third cheaper than the closed form, whose 1e-4 lands either side of it. Never
+//! under the true norm bar a few ULP, exact for an orthonormal basis, measured up to 17% over
+//! elsewhere (the row sums allow sqrt(3), the 3s fallback 3x). For a conservative cull radius;
+//! needs a finite basis like the closed form.
+VECTORCALL VECMATH_FINLINE vec4f v_mat44_spectral_norm43_bound_x(mat44f_cref tm);
 //! .xyz = scales of 3 axes
 VECTORCALL VECMATH_FINLINE vec3f v_mat44_scale43_sq(mat44f_cref tm);
 //! apply scale from .xyz to 3 axes
@@ -1320,12 +1356,38 @@ VECTORCALL VECMATH_INLINE int v_is_visible_b(vec3f bmin, vec3f bmax, mat44f_cref
 // last parameter is squared radius!
 VECTORCALL VECMATH_INLINE int v_test_triangle_sphere_intersection(vec3f A, vec3f B, vec3f C, vec4f sph_c, vec4f sph_r2_x);
 
+//! returns triangle vs solid finite cylinder intersection, touching included. p0 and p1 are the
+//! axis ends (the cap centers), cyl_r2 the squared radius in every lane. A zero-length axis
+//! returns false
+// Warning - a near-degenerate triangle has no reliable plane, and an edge within ~1e-6 rad of the
+// axis is taken as exactly parallel, so results there can go either way
+VECTORCALL VECMATH_INLINE bool v_test_triangle_cylinder_intersection(vec3f v0, vec3f v1, vec3f v2, vec3f p0, vec3f p1,
+  vec4f cyl_r2);
+
+//! clips the capsule a-b of radius r (in every lane) against the triangle v0 v1 v2 with unit normal
+//! n, the same way as the scalar clipCapsuleTriangle of math/dag_capsuleTriangle.h but with the
+//! three edges in SIMD lanes. When the capsule penetrates deeper than md (in every lane, in/out),
+//! writes the deepest contact (cp1 on the capsule, cp2 on the triangle), the new negative depth
+//! into md and returns true
+VECTORCALL VECMATH_INLINE bool v_clip_capsule_triangle(vec3f a, vec3f b, vec4f r, vec3f v0, vec3f v1, vec3f v2, vec3f n,
+  vec3f &cp1, vec3f &cp2, vec4f &md);
+
+//! returns triangle vs box intersection: separating axis test on the 3 box normals,
+//! the triangle normal and the 9 edge x box axis cross products
+// Warning - a near-degenerate triangle has no reliable plane, so its result can go either way
+VECTORCALL VECMATH_INLINE bool v_test_triangle_box_intersection(vec3f v0, vec3f v1, vec3f v2, bbox3f box);
+
 //! gets perfect triangle bounding sphere center.
 // Warning - can work incorrectly on degenerative triangles (can produce nans)
 VECTORCALL VECMATH_INLINE vec3f v_triangle_bounding_sphere_center(vec3f p1, vec3f p2, vec3f p3);
 
 // check is point p inside triangle with vertices t1,t2,t3 in 2D space
 VECTORCALL VECMATH_INLINE bool v_is_point_in_triangle_2d(vec4f p, vec4f t1, vec4f t2, vec4f t3);
+
+//! returns triangle vs triangle intersection, touching included
+// Warning - a near-degenerate triangle has no reliable plane, so its result can go either way
+VECTORCALL VECMATH_INLINE bool v_test_triangle_triangle_intersection(vec3f v0, vec3f v1, vec3f v2, vec3f u0, vec3f u1,
+  vec3f u2);
 
 //
 // Quaternion math

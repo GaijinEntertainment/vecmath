@@ -476,6 +476,12 @@ VECTORCALL VECMATH_FINLINE bool v_test_mat44_nan(mat44f m)
 {
   return v_test_xyzw_nan(v_add(v_add(m.col0, m.col1), v_add(m.col2, m.col3)));
 }
+VECTORCALL VECMATH_FINLINE bool v_test_mat43_finite(mat44f_cref m)
+{
+  vec4f bad01 = v_or(v_is_not_finite(m.col0), v_is_not_finite(m.col1));
+  vec4f bad23 = v_or(v_is_not_finite(m.col2), v_is_not_finite(m.col3));
+  return v_check_xyz_all_false(v_or(bad01, bad23));
+}
 VECTORCALL VECMATH_FINLINE bool v_test_xyz_abs_lt(vec3f a, vec3f limit) { return v_check_xyz_all_true(v_cmp_abs_gt(limit, a)); }
 
 VECTORCALL VECMATH_FINLINE void v_mat33_transpose(mat33f &dest, mat33f_cref src)
@@ -919,6 +925,36 @@ VECTORCALL VECMATH_FINLINE vec4f v_mat44_det43(mat44f_cref m)
 {
   return v_dot3(m.col2, v_cross3(m.col0, m.col1));
 }
+VECTORCALL VECMATH_FINLINE bool v_mat44_is_ident43(mat44f_cref m)
+{
+  // One reduction for all 12 lanes, not one per column: movmsk and its NEON emulation dominate.
+  vec4f eq01 = v_and(v_cmp_eq(m.col0, V_C_UNIT_1000), v_cmp_eq(m.col1, V_C_UNIT_0100));
+  vec4f eq23 = v_and(v_cmp_eq(m.col2, V_C_UNIT_0010), v_cmp_eq(m.col3, v_zero()));
+  return v_check_xyz_all_true(v_and(eq01, eq23));
+}
+VECTORCALL VECMATH_FINLINE bool v_mat44_is_equal43(mat44f_cref a, mat44f_cref b)
+{
+  vec4f eq01 = v_and(v_cmp_eq(a.col0, b.col0), v_cmp_eq(a.col1, b.col1));
+  vec4f eq23 = v_and(v_cmp_eq(a.col2, b.col2), v_cmp_eq(a.col3, b.col3));
+  return v_check_xyz_all_true(v_and(eq01, eq23));
+}
+VECTORCALL VECMATH_FINLINE bool v_mat44_is_signed_perm33(mat44f_cref m)
+{
+  // a * a == a holds for 0, 1 and +Inf (NaN fails). Test col0 alone first: a generic rotation
+  // fails there, and skipping the rest halves its cost.
+  vec4f a0 = v_abs(m.col0);
+  if (!v_check_xyz_all_true(v_cmp_eq(v_mul(a0, a0), a0)))
+    return false;
+  vec4f a1 = v_abs(m.col1), a2 = v_abs(m.col2);
+  vec4f zeroOrOne = v_and(v_cmp_eq(v_mul(a1, a1), a1), v_cmp_eq(v_mul(a2, a2), a2));
+  // With elements 0, 1 or +Inf the row sum is exact: 1 means one column hits the row, and Inf
+  // fails. The 1/2/4 tag of that column then differs across the rows iff the columns do.
+  vec4f oneColumn = v_cmp_eq(v_add(v_add(a0, a1), a2), V_C_ONE);
+  vec4f tag = v_madd(a1, V_C_TWO, a0);
+  tag = v_madd(a2, v_splats(4.f), tag);
+  vec4f distinct = v_cmp_neq(tag, v_perm_yzxw(tag));
+  return v_check_xyz_all_true(v_and(v_and(zeroOrOne, oneColumn), distinct));
+}
 VECTORCALL VECMATH_FINLINE vec3f v_mat44_scale43_sq(mat44f_cref tm)
 {
   // transpose puts col0..col2 x/y/z into rows, so one wide mul + 2 madd yields all
@@ -951,6 +987,100 @@ VECTORCALL VECMATH_FINLINE vec4f v_mat44_max_scale43_x(mat44f_cref tm)
 VECTORCALL VECMATH_FINLINE vec4f v_mat44_max_scale43(mat44f_cref tm)
 {
   return v_splat_x(v_mat44_max_scale43_x(tm)); // scalar sqrt + splat, see v_length*
+}
+VECTORCALL VECMATH_FINLINE void v_mat33_gram(vec3f &diag, vec3f &off, vec3f col0, vec3f col1, vec3f col2)
+{
+  // Rotating the transposed rows by a lane pairs each column with the next, so one madd chain
+  // gives the three pair dots; the last rotate puts each in the lane outside its own row. Sums go
+  // (x + z) + y like the SSE4.1 v_dot3_x, so lane-wise readers match it bit for bit without FMA.
+  // The transpose zeroes .w, so an unspecified column .w cannot reach a row.
+  mat33f rows;
+  v_mat33_transpose(rows, col0, col1, col2);
+  vec4f d = v_mul(rows.col0, rows.col0);
+  d = v_madd(rows.col2, rows.col2, d);
+  diag = v_madd(rows.col1, rows.col1, d);
+  vec4f o = v_mul(rows.col0, v_perm_yzxx(rows.col0));
+  o = v_madd(rows.col2, v_perm_yzxx(rows.col2), o);
+  o = v_madd(rows.col1, v_perm_yzxx(rows.col1), o);
+  off = v_perm_yzxx(o);
+}
+VECTORCALL VECMATH_FINLINE vec4f v_mat33_gram_bound_x(vec3f diag, vec3f off)
+{
+  // Every eigenvalue lies within sum_j |b_ij| of some b_ii, so the largest row sum bounds the
+  // largest of them. Each row adds the two off-diagonals outside its own lane, so off must be in
+  // v_mat33_gram's lane order. Rotations, not total less own lane: an overflowed lane stays inf
+  // where inf - inf would give NaN.
+  vec4f a = v_abs(off);
+  return v_hmax3(v_add(diag, v_add(v_perm_yzxw(a), v_perm_zxyw(a))));
+}
+VECTORCALL VECMATH_INLINE vec4f v_mat44_spectral_norm43_x(mat44f_cref tm)
+{
+  // The eigenvalue terms below are fourth powers of the scale, so normalize or a large finite
+  // basis overflows them. Divide, never multiply by 1/s: that is subnormal for a huge s and FTZ
+  // flushes it to zero, zeroing every column and reporting no stretch at all.
+  vec4f s = v_hmax3(v_max(v_abs(tm.col0), v_max(v_abs(tm.col1), v_abs(tm.col2))));
+  // Frobenius caps the norm at 3s for any basis, so this over-estimates, and is exact at s = 0.
+  if (v_check_xyzw_any_true(v_is_unsafe_divisor(s)))
+    return v_mul_x(s, v_splats(3.f));
+  vec4f c0 = v_div(tm.col0, s);
+  vec4f c1 = v_div(tm.col1, s);
+  vec4f c2 = v_div(tm.col2, s);
+
+  vec3f diag, off; // off is (b12, b02, b01), which the mixed term below relies on
+  v_mat33_gram(diag, off, c0, c1, c2);
+
+  // Largest eigenvalue of B by the closed form for a symmetric 3x3. The fixed divisors are
+  // reciprocal multiplies: under a ULP each, against the 1e-4 this form already carries.
+  vec4f q = v_mul_x(v_hadd3_x(diag), v_splats(1.f / 3.f));
+  vec4f dev = v_sub(diag, v_splat_x(q));
+  vec4f offSq = v_dot3_x(off, off);
+  vec4f p2 = v_add_x(v_dot3_x(dev, dev), v_add_x(offSq, offSq));
+
+  // Near-isotropic: B is a multiple of the identity and p would carry no significant bits to
+  // divide by. Scale-relative, so a tiny basis stays as accurate as a large one.
+  if (v_extract_x(p2) <= 1e-14f * v_extract_x(v_mul_x(q, q)))
+    return v_mul_x(s, v_sqrt_x(q));
+
+  // det(B - qI) = d0 d1 d2 + 2 b01 b02 b12 - (d0 b12^2 + d1 b02^2 + d2 b01^2), taken unscaled
+  // because det((B - qI)/p) is det(B - qI)/p^3.
+  vec4f devTriple = v_mul_x(v_splat_y(dev), v_splat_z(dev));
+  devTriple = v_mul_x(dev, devTriple);
+  vec4f offTriple = v_mul_x(v_splat_y(off), v_splat_z(off));
+  offTriple = v_mul_x(off, offTriple);
+  vec4f mixed = v_dot3_x(dev, v_mul(off, off));
+  vec4f det = v_add_x(devTriple, v_add_x(offTriple, offTriple));
+  det = v_sub_x(det, mixed);
+
+  vec4f pSq = v_mul_x(p2, v_splats(1.f / 6.f));
+  vec4f p = v_sqrt_x(pSq);
+  vec4f twoP = v_add_x(p, p);
+  // Clamped because rounding can carry it a hair outside the fit's domain.
+  vec4f halfDet = v_div_x(det, v_mul_x(twoP, pSq));
+  halfDet = v_clamp(halfDet, v_neg(V_C_ONE), V_C_ONE);
+
+  // cos(acos(halfDet)/3), fitted in w = sqrt(1 + halfDet) and not in halfDet itself: the value
+  // leaves -1 like 0.5 + k sqrt(1 + x), which no polynomial in x follows. Holds 2e-5.
+  vec4f w = v_sqrt_x(v_add_x(halfDet, V_C_ONE));
+  vec4f c = v_madd(v_splats(-0.0021872847f), w, v_splats(0.0135528138f));
+  c = v_madd(c, w, v_splats(-0.053177157f));
+  c = v_madd(c, w, v_splats(0.407814444f));
+  c = v_madd(c, w, v_splats(0.500019136f));
+
+  vec4f lambda = v_add_x(q, v_mul_x(twoP, c));
+  return v_mul_x(s, v_sqrt_x(v_max(lambda, v_zero())));
+}
+VECTORCALL VECMATH_FINLINE vec4f v_mat44_spectral_norm43_bound_x(mat44f_cref tm)
+{
+  // Normalized for the same reason as v_mat44_spectral_norm43_x: the Gram squares the elements.
+  vec4f s = v_hmax3(v_max(v_abs(tm.col0), v_max(v_abs(tm.col1), v_abs(tm.col2))));
+  if (v_check_xyzw_any_true(v_is_unsafe_divisor(s)))
+    return v_mul_x(s, v_splats(3.f));
+  vec4f c0 = v_div(tm.col0, s);
+  vec4f c1 = v_div(tm.col1, s);
+  vec4f c2 = v_div(tm.col2, s);
+  vec3f diag, off;
+  v_mat33_gram(diag, off, c0, c1, c2);
+  return v_mul_x(s, v_sqrt_x(v_mat33_gram_bound_x(diag, off)));
 }
 
 VECTORCALL VECMATH_FINLINE vec4f v_mat44_mul_bsph(mat44f_cref m, vec4f bsph)
@@ -1840,7 +1970,7 @@ VECTORCALL VECMATH_FINLINE void v_mat44_compose(mat44f &dest, vec4f pos, quat4f 
 //! decompose 3x3 matrix to rotation/scale
 VECTORCALL VECMATH_FINLINE void v_mat33_decompose(mat33f_cref tm, quat4f &rot, vec4f &scl)
 {
-  mat44f m{tm.col0, tm.col1, tm.col2};
+  mat44f m{tm.col0, tm.col1, tm.col2, {}};
   scl = v_sqrt(v_mat44_scale43_sq(m));
   if (v_test_vec_x_lt_0(v_mat33_det(tm)))
     scl = v_perm_xycw(scl, v_neg(scl));
@@ -3254,6 +3384,371 @@ VECTORCALL VECMATH_INLINE int v_test_triangle_sphere_intersection(vec3f A, vec3f
                                      v_and(v_cmp_gt(v_dot3_x(Q3, Q3), v_mul_x(sph_r2_x, v_mul_x(e3, e3))), v_cmp_gt(v_dot3_x(Q3, QB), v_zero()))));
 }
 
+// the cap disk with center c meets the triangle plane in a chord; w is the part of the triangle
+// normal n across the axis (the in-disk direction to that plane), ww its squared length. With the
+// triangle edges already tested against the solid cylinder, the disk reaches the triangle only
+// when the whole chord lies inside it, so the chord midpoint decides
+VECTORCALL VECMATH_FINLINE bool v_cylinder_cap_chord_in_triangle(vec3f c, vec3f w, vec4f ww, vec4f r2, vec3f n, vec3f v0,
+  vec3f v1, vec3f v2)
+{
+  vec4f dist = v_dot3(n, v_sub(c, v0));
+  if (v_test_vec_x_gt(v_mul(dist, dist), v_mul(r2, ww)))
+    return false;
+  vec4f s = v_splat_x(v_div_x(v_neg(dist), v_max(ww, V_C_VERY_SMALL_VAL)));
+  vec3f x = v_madd(w, s, c);
+  vec4f s0 = v_dot3(v_cross3(v_sub(v1, v0), v_sub(x, v0)), n);
+  vec4f s1 = v_dot3(v_cross3(v_sub(v2, v1), v_sub(x, v1)), n);
+  vec4f s2 = v_dot3(v_cross3(v_sub(v0, v2), v_sub(x, v2)), n);
+  vec4f inside = v_and(v_cmp_ge(s0, v_zero()), v_cmp_ge(s1, v_zero()));
+  inside = v_and(inside, v_cmp_ge(s2, v_zero()));
+  return v_check_xyz_all_true(inside);
+}
+
+VECTORCALL VECMATH_INLINE bool v_test_triangle_cylinder_intersection(vec3f v0, vec3f v1, vec3f v2, vec3f p0, vec3f p1,
+  vec4f cyl_r2)
+{
+  vec3f d = v_sub(p1, p0);
+  vec4f dd = v_dot3(d, d);
+  if (v_test_vec_x_le_0(dd))
+    return false;
+
+  // the edges v0v1, v1v2, v2v0 in the xyz lanes: m = edge start - p0, n = edge vector, both SoA
+  mat33f m;
+  v_mat33_transpose(m, v_sub(v0, p0), v_sub(v1, p0), v_sub(v2, p0));
+  vec4f mx = m.col0, my = m.col1, mz = m.col2;
+  vec4f nx = v_sub(v_perm_yzxw(mx), mx);
+  vec4f ny = v_sub(v_perm_yzxw(my), my);
+  vec4f nz = v_sub(v_perm_yzxw(mz), mz);
+  vec4f dx = v_splat_x(d), dy = v_splat_y(d), dz = v_splat_z(d);
+
+  // axial coordinates, scaled by |d|
+  vec4f md = v_mul(mx, dx);
+  md = v_madd(my, dy, md);
+  md = v_madd(mz, dz, md);
+  vec4f nd = v_mul(nx, dx);
+  nd = v_madd(ny, dy, nd);
+  nd = v_madd(nz, dz, nd);
+
+  // radial parts as m x d and n x d (scaled by |d|), so the quadratic below has no cancellation
+  vec4f mdx = v_msub(my, dz, v_mul(mz, dy));
+  vec4f mdy = v_msub(mz, dx, v_mul(mx, dz));
+  vec4f mdz = v_msub(mx, dy, v_mul(my, dx));
+  vec4f ndx = v_msub(ny, dz, v_mul(nz, dy));
+  vec4f ndy = v_msub(nz, dx, v_mul(nx, dz));
+  vec4f ndz = v_msub(nx, dy, v_mul(ny, dx));
+
+  // a t^2 + 2 b t + c <= 0 is the part of the edge inside the infinite cylinder (all times dd)
+  vec4f a = v_mul(ndx, ndx);
+  a = v_madd(ndy, ndy, a);
+  a = v_madd(ndz, ndz, a);
+  vec4f b = v_mul(mdx, ndx);
+  b = v_madd(mdy, ndy, b);
+  b = v_madd(mdz, ndz, b);
+  vec4f c = v_mul(mdx, mdx);
+  c = v_madd(mdy, mdy, c);
+  c = v_madd(mdz, mdz, c);
+  c = v_nmsub(dd, cyl_r2, c);
+  vec4f nn = v_mul(nx, nx);
+  nn = v_madd(ny, ny, nn);
+  nn = v_madd(nz, nz, nn);
+
+  vec4f disc = v_msub(b, b, v_mul(a, c));
+  vec4f sq = v_sqrt(v_max(disc, v_zero()));
+  vec4f invA = v_rcp(a);
+  vec4f radLo = v_mul(v_sub(v_neg(b), sq), invA);
+  vec4f radHi = v_mul(v_sub(sq, b), invA);
+  // a = dd*nn*sin^2(edge, axis): a near-parallel edge is inside for every t or for none
+  vec4f parallel = v_cmp_le(a, v_mul(v_mul(dd, nn), v_splats(1e-12f)));
+  vec4f radOk = v_sel(v_cmp_ge(disc, v_zero()), v_cmp_le(c, v_zero()), parallel);
+  radLo = v_sel(radLo, V_C_MIN_VAL, parallel);
+  radHi = v_sel(radHi, V_C_MAX_VAL, parallel);
+
+  // 0 <= md + t nd <= dd is the part between the caps
+  vec4f invNd = v_rcp(nd);
+  vec4f ta = v_mul(v_neg(md), invNd);
+  vec4f tb = v_mul(v_sub(dd, md), invNd);
+  vec4f flat = v_cmp_eq(nd, v_zero());
+  vec4f slabOk = v_or(v_cmp_neq(nd, v_zero()), v_and(v_cmp_ge(md, v_zero()), v_cmp_le(md, dd)));
+  vec4f slabLo = v_sel(v_min(ta, tb), V_C_MIN_VAL, flat);
+  vec4f slabHi = v_sel(v_max(ta, tb), V_C_MAX_VAL, flat);
+
+  vec4f lo = v_max(v_max(radLo, slabLo), v_zero());
+  vec4f hi = v_min(v_min(radHi, slabHi), V_C_ONE);
+  vec4f edgeHit = v_and(v_and(radOk, slabOk), v_cmp_le(lo, hi));
+  if (v_check_xyz_any_true(edgeHit))
+    return true;
+
+  // a collapsed triangle has no interior: its edges above were the whole test
+  vec3f e0 = v_sub(v1, v0);
+  vec3f n = v_cross3(e0, v_sub(v2, v1));
+  if (v_test_vec_x_le_0(v_length3_sq_x(n)))
+    return false;
+
+  // the axis segment through the triangle interior: signed volumes, sign-normalized by the side of p0
+  vec3f ap = v_sub(p0, v0);
+  vec4f denom = v_neg(v_dot3(d, n));
+  vec4f flip = v_and(denom, v_cast_vec4f(V_CI_SIGN_MASK));
+  vec3f e = v_cross3(ap, d);
+  vec4f t = v_xor(v_dot3(ap, n), flip);
+  vec4f bv = v_xor(v_dot3(v_sub(v2, v0), e), flip);
+  vec4f bw = v_xor(v_neg(v_dot3(e0, e)), flip);
+  denom = v_xor(denom, flip);
+  vec4f axisHit = v_and(v_cmp_gt(denom, v_zero()), v_cmp_ge(t, v_zero()));
+  axisHit = v_and(axisHit, v_cmp_le(t, denom));
+  axisHit = v_and(axisHit, v_and(v_cmp_ge(bv, v_zero()), v_cmp_ge(bw, v_zero())));
+  axisHit = v_and(axisHit, v_cmp_le(v_add(bv, bw), denom));
+  if (v_check_xyz_all_true(axisHit))
+    return true;
+
+  // the two cap disks
+  vec4f nDotD = v_dot3(n, d);
+  vec3f w = v_nmsub(d, v_splat_x(v_div_x(nDotD, dd)), n);
+  vec4f ww = v_dot3(w, w);
+  if (v_cylinder_cap_chord_in_triangle(p0, w, ww, cyl_r2, n, v0, v1, v2))
+    return true;
+  return v_cylinder_cap_chord_in_triangle(p1, w, ww, cyl_r2, n, v0, v1, v2);
+}
+
+VECTORCALL VECMATH_INLINE bool v_clip_capsule_triangle(vec3f a, vec3f b, vec4f r, vec3f v0, vec3f v1, vec3f v2, vec3f n,
+  vec3f &cp1, vec3f &cp2, vec4f &md)
+{
+  // plane pre-test: the end nearer to the plane must be within r, on the side of the farther one
+  vec4f pd0 = v_dot3(v_sub(a, v0), n);
+  vec4f pd1 = v_dot3(v_sub(b, v0), n);
+  vec4f d1Farther = v_cmp_ge(v_abs(pd1), v_abs(pd0));
+  vec4f pdMin = v_sel(pd1, pd0, d1Farther);
+  vec4f pdMax = v_sel(pd0, pd1, d1Farther);
+  vec4f negR = v_neg(r);
+  vec4f front = v_and(v_cmp_ge(pdMax, v_zero()), v_cmp_le(pdMin, r));
+  vec4f back = v_and(v_cmp_lt(pdMax, v_zero()), v_cmp_ge(pdMin, negR));
+  if (!v_check_xyz_all_true(v_or(front, back)))
+    return false;
+
+  // the edges in the xyz lanes: start vertex v, edge vector e, inward unit edge-plane normal en
+  mat33f vt;
+  v_mat33_transpose(vt, v0, v1, v2);
+  vec4f vx = vt.col0, vy = vt.col1, vz = vt.col2;
+  vec4f ex = v_sub(v_perm_yzxw(vx), vx);
+  vec4f ey = v_sub(v_perm_yzxw(vy), vy);
+  vec4f ez = v_sub(v_perm_yzxw(vz), vz);
+  vec4f nx = v_splat_x(n), ny = v_splat_y(n), nz = v_splat_z(n);
+  vec4f enx = v_msub(ny, ez, v_mul(nz, ey));
+  vec4f eny = v_msub(nz, ex, v_mul(nx, ez));
+  vec4f enz = v_msub(nx, ey, v_mul(ny, ex));
+  vec4f enLenSq = v_mul(enx, enx);
+  enLenSq = v_madd(eny, eny, enLenSq);
+  enLenSq = v_madd(enz, enz, enLenSq);
+  vec4f enInvLen = v_rsqrt(enLenSq);
+  enx = v_mul(enx, enInvLen);
+  eny = v_mul(eny, enInvLen);
+  enz = v_mul(enz, enInvLen);
+
+  // signed distances of both ends to the edge planes, positive inside
+  vec4f ax = v_splat_x(a), ay = v_splat_y(a), az = v_splat_z(a);
+  vec4f bx = v_splat_x(b), by = v_splat_y(b), bz = v_splat_z(b);
+  vec4f dpx = v_sub(ax, vx), dpy = v_sub(ay, vy), dpz = v_sub(az, vz);
+  vec4f d0 = v_mul(enx, dpx);
+  d0 = v_madd(eny, dpy, d0);
+  d0 = v_madd(enz, dpz, d0);
+  vec4f d1 = v_mul(enx, v_sub(bx, vx));
+  d1 = v_madd(eny, v_sub(by, vy), d1);
+  d1 = v_madd(enz, v_sub(bz, vz), d1);
+  vec4f out0 = v_cmp_lt(d0, v_zero());
+  vec4f out1 = v_cmp_lt(d1, v_zero());
+  vec4f bothOut = v_and(out0, out1);
+
+  bool outside;
+  vec4f t0 = v_zero(), t1 = V_C_ONE;
+  if (v_check_xyz_any_true(bothOut))
+  {
+    // the whole segment lies beyond an edge plane; farther than r means no contact. The scalar
+    // version checks only the first such edge, but a later one fails the edge search below anyway
+    if (v_check_xyz_any_true(v_and(bothOut, v_cmp_lt(v_max(d0, d1), negR))))
+      return false;
+    outside = true;
+  }
+  else
+  {
+    // clip the segment to the edge planes it crosses
+    vec4f t = v_div(d0, v_sub(d0, d1));
+    t0 = v_hmax3(v_sel(v_zero(), t, out0));
+    t1 = v_hmin3(v_sel(V_C_ONE, t, out1));
+    outside = v_test_vec_x_gt(t0, t1) != 0;
+  }
+
+  if (outside)
+  {
+    // the segment misses the prism: nearest point pair to each edge, clamped step by step the way
+    // the scalar version does it (segment param from the edge point, then the edge param back)
+    vec3f cw = v_sub(b, a);
+    vec4f clen = v_splat_x(v_length3_x(cw));
+    cw = v_mul(cw, v_sel(v_zero(), v_rcp(clen), v_cmp_neq(clen, v_zero())));
+    vec4f cwx = v_splat_x(cw), cwy = v_splat_y(cw), cwz = v_splat_z(cw);
+    vec4f lSq = v_mul(ex, ex);
+    lSq = v_madd(ey, ey, lSq);
+    lSq = v_madd(ez, ez, lSq);
+    vec4f l = v_sqrt(lSq);
+    vec4f invL = v_sel(V_C_ONE, v_rcp(l), v_cmp_neq(l, v_zero()));
+    vec4f wx = v_mul(ex, invL), wy = v_mul(ey, invL), wz = v_mul(ez, invL);
+    vec4f k = v_mul(wx, cwx);
+    k = v_madd(wy, cwy, k);
+    k = v_madd(wz, cwz, k);
+    vec4f hx = v_nmsub(cwx, k, wx), hy = v_nmsub(cwy, k, wy), hz = v_nmsub(cwz, k, wz);
+    vec4f num = v_mul(dpx, hx);
+    num = v_madd(dpy, hy, num);
+    num = v_madd(dpz, hz, num);
+    vec4f denum = v_nmsub(k, k, V_C_ONE);
+    vec4f t = v_sel(v_div(num, denum), V_C_HALF, v_cmp_eq(denum, v_zero()));
+    t = v_clamp(t, v_zero(), l);
+    vec4f t2 = v_mul(v_msub(wx, t, dpx), cwx);
+    t2 = v_madd(v_msub(wy, t, dpy), cwy, t2);
+    t2 = v_madd(v_msub(wz, t, dpz), cwz, t2);
+    t2 = v_clamp(t2, v_zero(), clen);
+    t = v_mul(v_madd(cwx, t2, dpx), wx);
+    t = v_madd(v_madd(cwy, t2, dpy), wy, t);
+    t = v_madd(v_madd(cwz, t2, dpz), wz, t);
+    t = v_clamp(t, v_zero(), l);
+
+    // p1 on the edge, p2 on the segment
+    vec4f p1x = v_madd(wx, t, vx), p1y = v_madd(wy, t, vy), p1z = v_madd(wz, t, vz);
+    vec4f p2x = v_madd(cwx, t2, ax), p2y = v_madd(cwy, t2, ay), p2z = v_madd(cwz, t2, az);
+    vec4f gx = v_sub(p2x, p1x), gy = v_sub(p2y, p1y), gz = v_sub(p2z, p1z);
+    vec4f dlSq = v_mul(gx, gx);
+    dlSq = v_madd(gy, gy, dlSq);
+    dlSq = v_madd(gz, gz, dlSq);
+    vec4f dl = v_sqrt(dlSq);
+    vec4f d = v_sub(dl, r);
+
+    // the deepest penetrating edge that beats md; the first lane on ties, like the scalar loop
+    vec4f cand = v_and(v_cmp_lt(d, v_zero()), v_cmp_lt(d, md));
+    if (!v_check_xyz_any_true(cand))
+      return false;
+    vec4f dBest = v_hmin3(v_sel(V_C_MAX_VAL, d, cand));
+    vec4f win = v_and(cand, v_cmp_eq(d, dBest));
+    vec4f winX = v_splat_x(win), winY = v_splat_y(win);
+    vec4f isLane1 = v_andnot(winX, winY);
+    vec4f isLane2 = v_andnot(v_or(winX, winY), v_splat_z(win));
+    mat33f p1, p2, w;
+    v_mat33_transpose(p1, p1x, p1y, p1z);
+    v_mat33_transpose(p2, p2x, p2y, p2z);
+    v_mat33_transpose(w, wx, wy, wz);
+    vec3f q1 = v_sel(v_sel(p1.col0, p1.col1, isLane1), p1.col2, isLane2);
+    vec3f q2 = v_sel(v_sel(p2.col0, p2.col1, isLane1), p2.col2, isLane2);
+    vec3f wq = v_sel(v_sel(w.col0, w.col1, isLane1), w.col2, isLane2);
+    vec4f dlq = v_sel(v_sel(v_splat_x(dl), v_splat_y(dl), isLane1), v_splat_z(dl), isLane2);
+    // contact direction from the edge point to the segment point; a touching pair has none
+    vec3f dirApart = v_mul(v_sub(q2, q1), v_rcp(dlq));
+    vec3f dirTouch = v_norm3_safe(v_cross3(wq, cw), v_zero());
+    vec3f dir = v_sel(dirTouch, dirApart, v_cmp_neq(dlq, v_zero()));
+    md = dBest;
+    cp2 = q1;
+    cp1 = v_nmsub(dir, r, q2);
+    return true;
+  }
+
+  // the segment crosses the prism between t0 and t1: plane distances there decide the depth
+  float fd0 = v_extract_x(pd0), fd1 = v_extract_x(pd1);
+  float fr = v_extract_x(r), fmd = v_extract_x(md);
+  float dmin = (fd1 - fd0) * v_extract_x(t0) + fd0;
+  float dmax = (fd1 - fd0) * v_extract_x(t1) + fd0;
+  bool ret = false;
+  vec4f tHit = v_zero();
+  if (dmin <= -fr)
+  {
+    if (dmax <= -fr)
+      return false;
+  }
+  else if (dmin >= fr)
+  {
+    if (dmax >= fr)
+      return false;
+    float d = dmax - fr;
+    if (d < fmd)
+    {
+      fmd = d;
+      tHit = t1;
+      ret = true;
+    }
+    else
+      return false;
+  }
+  if (dmin < dmax)
+  {
+    float d = dmin - fr;
+    if (d < fmd)
+    {
+      fmd = d;
+      tHit = t0;
+      ret = true;
+    }
+    else if (!ret)
+      return false;
+  }
+  else
+  {
+    float d = dmax - fr;
+    if (d < fmd)
+    {
+      fmd = d;
+      tHit = t1;
+      ret = true;
+    }
+    else if (!ret)
+      return false;
+  }
+  md = v_splats(fmd);
+  cp1 = v_nmsub(n, r, v_madd(v_sub(b, a), tHit, a));
+  cp2 = v_nmsub(n, md, cp1);
+  return true;
+}
+
+// separation margin of one triangle edge on the three cross(edge, box axis) directions, one per
+// xyz lane; proj is the edge start vertex already projected, n_max/n_min clamp the triangle normal
+VECTORCALL VECMATH_FINLINE vec3f v_triangle_box_edge_sep(vec3f edge, vec3f proj, vec3f n_max, vec3f n_min, vec3f half_zxy,
+  vec3f half_yzx)
+{
+  vec3f fe = v_abs(edge);
+  vec3f rad = v_mul(v_perm_zxyw(fe), half_yzx);
+  rad = v_madd(v_perm_yzxw(fe), half_zxy, rad);
+  vec3f lo = v_sub(proj, n_max);
+  vec3f negHi = v_sub(n_min, proj);
+  return v_sub(v_max(lo, negHi), rad);
+}
+
+VECTORCALL VECMATH_INLINE bool v_test_triangle_box_intersection(vec3f v0, vec3f v1, vec3f v2, bbox3f box)
+{
+  vec3f half = v_mul(v_bbox3_size(box), V_C_HALF);
+  vec3f center = v_bbox3_center(box);
+  v0 = v_sub(v0, center);
+  v1 = v_sub(v1, center);
+  v2 = v_sub(v2, center);
+
+  // the 3 box normals, i.e. the triangle bounding box against the box
+  vec3f triMin = v_min(v0, v_min(v1, v2));
+  vec3f triMax = v_max(v0, v_max(v1, v2));
+  if (v_check_xyz_any_true(v_cmp_gt(v_max(triMin, v_neg(triMax)), half)))
+    return false;
+
+  vec3f e0 = v_sub(v1, v0);
+  vec3f e1 = v_sub(v2, v1);
+  vec3f e2 = v_sub(v0, v2);
+
+  // the triangle normal, i.e. the triangle plane against the box
+  vec3f n = v_cross3(e0, e1);
+  if (v_test_vec_x_gt(v_abs(v_dot3_x(n, v0)), v_dot3_x(v_abs(n), half)))
+    return false;
+
+  // the 9 edge x box axis products, three axes per edge in the xyz lanes
+  vec3f halfZxy = v_perm_zxyw(half);
+  vec3f halfYzx = v_perm_yzxw(half);
+  vec3f nMax = v_max(n, v_zero());
+  vec3f nMin = v_min(n, v_zero());
+  vec3f sep = v_triangle_box_edge_sep(e0, v_cross3(v0, e0), nMax, nMin, halfZxy, halfYzx);
+  sep = v_max(sep, v_triangle_box_edge_sep(e1, v_cross3(v1, e1), nMax, nMin, halfZxy, halfYzx));
+  sep = v_max(sep, v_triangle_box_edge_sep(e2, v_cross3(v2, e2), nMax, nMin, halfZxy, halfYzx));
+  return v_check_xyz_all_false(v_cmp_gt(sep, v_zero()));
+}
+
 VECTORCALL VECMATH_INLINE vec3f v_triangle_bounding_sphere_center(vec3f p1, vec3f p2, vec3f p3)
 {
   vec3f edge1 = v_sub(p2, p1);
@@ -3308,6 +3803,219 @@ VECTORCALL VECMATH_INLINE bool v_is_point_in_triangle_2d(vec4f p, vec4f t1, vec4
   int signMask = v_signmask(e) & (1 | 2 | 4);
   return signMask == 0 || signMask == (1 | 2 | 4);
 }
+
+// Triangle/triangle overlap, Tomas Moller 1997 (A Fast Triangle-Triangle Intersection Test):
+// reject on either plane, then compare the intervals both triangles cut on the line where the
+// planes meet. Coplanar pairs fall back to 2d edge-edge and point-in-triangle tests.
+
+VECTORCALL VECMATH_FINLINE bool v_tri_tri_edge_against_edges(vec4f v0, vec4f v1, vec3f u0, vec3f u1, vec3f u2)
+{
+  vec4f a = v_sub(v1, v0);
+  vec3f ax = v_splat_x(a);
+  vec3f ay = v_splat_y(a);
+  vec3f v0x = v_splat_x(v0);
+  vec3f v0y = v_splat_y(v0);
+  vec3f u0x = v_perm_xyab(v_perm_xaxa(u0, u1), u2);
+  vec3f u1x = v_perm_xyab(v_perm_xaxa(u1, u2), u0);
+  vec3f u0y = v_perm_xyab(v_perm_xaxa(v_splat_y(u0), v_splat_y(u1)), v_splat_y(u2));
+  vec3f u1y = v_perm_xyab(v_perm_xaxa(v_splat_y(u1), v_splat_y(u2)), v_splat_y(u0));
+  vec3f bx = v_sub(u0x, u1x);
+  vec3f by = v_sub(u0y, u1y);
+  vec3f cx = v_sub(v0x, u0x);
+  vec3f cy = v_sub(v0y, u0y);
+  vec3f f = v_sub(v_mul(ay, bx), v_mul(ax, by));
+  vec3f d = v_sub(v_mul(by, cx), v_mul(bx, cy));
+  vec3f e = v_sub(v_mul(ax, cy), v_mul(ay, cx));
+  vec3f cond1 = v_and(v_and(v_cmp_gt(f, v_zero()), v_cmp_ge(d, v_zero())), v_cmp_le(d, f));
+  vec3f cond2 = v_and(v_and(v_cmp_lt(f, v_zero()), v_cmp_le(d, v_zero())), v_cmp_ge(d, f));
+  cond1 = v_and(cond1, v_and(v_cmp_ge(e, v_zero()), v_cmp_le(e, f)));
+  cond2 = v_and(cond2, v_and(v_cmp_le(e, v_zero()), v_cmp_ge(e, f)));
+  return v_check_xyz_any_true(v_or(cond1, cond2));
+}
+
+VECTORCALL VECMATH_FINLINE bool v_tri_tri_coplanar(vec3f normal, vec3f v0, vec3f v1, vec3f v2, vec3f u0, vec3f u1, vec3f u2)
+{
+  vec3f a = v_abs(normal);
+  if (v_extract_x(a) > v_extract_y(a) && v_extract_x(a) > v_extract_z(a))
+  {
+    /* A[0] is greatest */
+    v0 = v_perm_yzxx(v0);
+    v1 = v_perm_yzxx(v1);
+    v2 = v_perm_yzxx(v2);
+    u0 = v_perm_yzxx(u0);
+    u1 = v_perm_yzxx(u1);
+    u2 = v_perm_yzxx(u2);
+  }
+  else if (v_extract_y(a) > v_extract_x(a) && v_extract_y(a) > v_extract_z(a))
+  {
+    /* A[1] is greatest */
+    v0 = v_perm_xzxz(v0);
+    v1 = v_perm_xzxz(v1);
+    v2 = v_perm_xzxz(v2);
+    u0 = v_perm_xzxz(u0);
+    u1 = v_perm_xzxz(u1);
+    u2 = v_perm_xzxz(u2);
+  }
+
+  /* test all edges of triangle 1 against the edges of triangle 2 */
+  if (v_tri_tri_edge_against_edges(v0, v1, u0, u1, u2))
+    return true;
+  if (v_tri_tri_edge_against_edges(v1, v2, u0, u1, u2))
+    return true;
+  if (v_tri_tri_edge_against_edges(v2, v0, u0, u1, u2))
+    return true;
+
+  /* finally, test if tri1 is totally contained in tri2 or vice versa */
+  if (v_is_point_in_triangle_2d(v0, u0, u1, u2))
+    return true;
+  if (v_is_point_in_triangle_2d(u0, v0, v1, v2))
+    return true;
+
+  return false;
+}
+
+VECTORCALL VECMATH_FINLINE void v_tri_tri_intervals(vec3f vp, vec3f dv012, vec3f dv0dv1, vec3f dv0dv2, vec3f &bca, vec3f &x0x1)
+{
+  // dv2 < 0.0f || dv2 > 0.0f
+  vec3f bca_4 = v_perm_xycd(v_mul(v_sub(vp, v_splat_z(vp)), v_splat_z(dv012)), v_splat_z(vp));
+  vec4f x0x1_4 = v_sub(v_splat_z(dv012), dv012);
+  vec4f cmp4 = v_cmp_neq(v_splat_z(dv012), v_zero());
+  bca = v_sel(bca, bca_4, cmp4);
+  x0x1 = v_sel(x0x1, x0x1_4, cmp4);
+
+  // dv1 < 0.0f || dv1 > 0.0f
+  vec3f bca_3 = v_perm_xycd(v_mul(v_sub(v_perm_xzxz(vp), v_splat_y(vp)), v_splat_y(dv012)), v_splat_y(vp));
+  vec4f x0x1_3 = v_sub(v_splat_y(dv012), v_perm_xzxz(dv012));
+  vec4f cmp3 = v_cmp_neq(v_splat_y(dv012), v_zero());
+  bca = v_sel(bca, bca_3, cmp3);
+  x0x1 = v_sel(x0x1, x0x1_3, cmp3);
+
+  /* here we know that d0d1<=0.0 or that dv0!=0.0 */
+  vec3f bca_2 = v_perm_xycd(v_mul(v_sub(v_perm_yzxw(vp), v_splat_x(vp)), v_splat_x(dv012)), v_splat_x(vp));
+  vec4f x0x1_2 = v_sub(v_splat_x(dv012), v_perm_yzxw(dv012));
+  vec4f cmp2 = v_or(v_cmp_gt(v_mul(v_splat_y(dv012), v_splat_z(dv012)), v_zero()), v_cmp_neq(v_splat_x(dv012), v_zero()));
+  bca = v_sel(bca, bca_2, cmp2);
+  x0x1 = v_sel(x0x1, x0x1_2, cmp2);
+
+  /* here we know that d0d1<=0.0 */
+  vec3f bca_1 = v_perm_xycd(v_mul(v_sub(v_perm_xzxz(vp), v_splat_y(vp)), v_splat_y(dv012)), v_splat_y(vp));
+  vec4f x0x1_1 = v_sub(v_splat_y(dv012), v_perm_xzxz(dv012));
+  vec4f cmp1 = v_cmp_gt(v_splat_x(dv0dv2), v_zero());
+  bca = v_sel(bca, bca_1, cmp1);
+  x0x1 = v_sel(x0x1, x0x1_1, cmp1);
+
+  /* here we know that dv0dv2<=0.0 */
+  /* that is dv0, dv1 are on the same side, dv2 on the other or on the plane */
+  vec3f bca_0 = v_perm_xycd(v_mul(v_sub(vp, v_splat_z(vp)), v_splat_z(dv012)), v_splat_z(vp));
+  vec4f x0x1_0 = v_sub(v_splat_z(dv012), dv012);
+  vec4f cmp0 = v_cmp_gt(v_splat_x(dv0dv1), v_zero());
+  bca = v_sel(bca, bca_0, cmp0);
+  x0x1 = v_sel(x0x1, x0x1_0, cmp0);
+}
+
+VECTORCALL VECMATH_INLINE bool v_test_triangle_triangle_intersection(vec3f v0, vec3f v1, vec3f v2, vec3f u0, vec3f u1, vec3f u2)
+{
+  /* compute plane equation of triangle(V0,V1,V2) */
+  vec3f e1 = v_sub(v1, v0);
+  vec3f e2 = v_sub(v2, v0);
+  vec3f n1 = v_cross3(e1, e2);
+  vec4f d1 = v_dot3(n1, v0);
+  /* plane equation 1: N1.X+d1=0 */
+
+  /* put U0,U1,U2 into plane equation 1 to compute signed distances to the plane*/
+  // one SoA dot across the three vertices, not three _x dots plus two perms to pack the
+  // lanes back together: the three products are independent where a horizontal reduction
+  // serializes. The transpose pays for itself again in the projection below.
+  mat33f upmat = {u0, u1, u2};
+  v_mat33_transpose(upmat, upmat);
+  vec3f du012 = v_add(v_add(v_mul(upmat.col0, v_splat_x(n1)), v_mul(upmat.col2, v_splat_z(n1))),
+    v_mul(upmat.col1, v_splat_y(n1)));
+  du012 = v_sub(du012, d1);
+
+  /* coplanarity robustness check */
+  // a vertex within the coplanarity epsilon of the plane must read as exactly on it
+  du012 = v_and(du012, v_cmp_ge(v_abs(du012), v_splats(1e-6f)));
+  vec4f du0du1 = v_mul_x(du012, v_splat_y(du012));
+  vec4f du0du2 = v_mul_x(du012, v_splat_z(du012));
+  if (v_test_vec_x_gt_0(du0du1) && v_test_vec_x_gt_0(du0du2)) /* same sign on all of them + not equal 0 ? */
+    return false;                                             /* no intersection occurs */
+
+  /* compute plane of triangle (U0,U1,U2) */
+  e1 = v_sub(u1, u0);
+  e2 = v_sub(u2, u0);
+  vec3f n2 = v_cross3(e1, e2);
+  vec4f d2 = v_dot3(n2, u0);
+  /* plane equation 2: N2.X+d2=0 */
+
+  /* put V0,V1,V2 into plane equation 2 */
+  mat33f vpmat = {v0, v1, v2};
+  v_mat33_transpose(vpmat, vpmat);
+  vec3f dv012 = v_add(v_add(v_mul(vpmat.col0, v_splat_x(n2)), v_mul(vpmat.col2, v_splat_z(n2))),
+    v_mul(vpmat.col1, v_splat_y(n2)));
+  dv012 = v_sub(dv012, d2);
+
+  // a vertex within the coplanarity epsilon of the plane must read as exactly on it
+  dv012 = v_and(dv012, v_cmp_ge(v_abs(dv012), v_splats(1e-6f)));
+
+  vec4f dv0dv1 = v_mul_x(dv012, v_splat_y(dv012));
+  vec4f dv0dv2 = v_mul_x(dv012, v_splat_z(dv012));
+  if (v_test_vec_x_gt_0(dv0dv1) && v_test_vec_x_gt_0(dv0dv2)) /* same sign on all of them + not equal 0 ? */
+    return false;                                             /* no intersection occurs */
+
+  /* compute direction of intersection line */
+  vec3f dd = v_abs(v_cross3(n1, n2));
+
+  /* compute mask of largest component of D */
+  vec3f ddX = v_splat_x(dd);
+  vec3f ddY = v_splat_y(dd);
+  vec3f ddZ = v_splat_z(dd);
+  vec3f maskX = v_and(v_cmp_ge(ddX, ddY), v_cmp_ge(ddX, ddZ));
+  vec3f maskY = v_andnot(maskX, v_cmp_ge(ddY, ddZ));
+  vec3f maskZ = v_andnot(maskX, v_cmp_gt(ddZ, ddY));
+
+  /* this is the simplified projection onto L*/
+  vec3f vp = v_or(v_and(vpmat.col0, maskX), v_or(v_and(vpmat.col1, maskY), v_and(vpmat.col2, maskZ)));
+  vec3f up = v_or(v_and(upmat.col0, maskX), v_or(v_and(upmat.col1, maskY), v_and(upmat.col2, maskZ)));
+
+  vec3f allBitsSet = v_cmp_eq(v_zero(), v_zero());
+
+  /* compute interval for triangle 1 */
+  vec3f bca = allBitsSet;
+  vec3f x0x1 = allBitsSet;
+  v_tri_tri_intervals(vp, dv012, dv0dv1, dv0dv2, bca, x0x1);
+  if (v_check_xyzw_all_true(v_cmp_eqi(v_and(bca, x0x1), allBitsSet)))
+  {
+    /* triangles are coplanar */
+    return v_tri_tri_coplanar(n1, v0, v1, v2, u0, u1, u2);
+  }
+
+  /* compute interval for triangle 2 */
+  vec3f efd = allBitsSet;
+  vec3f y0y1 = allBitsSet;
+  v_tri_tri_intervals(up, du012, du0du1, du0du2, efd, y0y1);
+  if (v_check_xyzw_all_true(v_cmp_eqi(v_and(efd, y0y1), allBitsSet)))
+  {
+    /* triangles are coplanar */
+    return v_tri_tri_coplanar(n1, v0, v1, v2, u0, u1, u2);
+  }
+
+  // .xy calculations
+  vec4f xx = v_mul(x0x1, v_perm_yxxc(x0x1, x0x1));
+  vec4f yy = v_mul(y0y1, v_perm_yxxc(y0y1, y0y1));
+  vec4f xxyy = v_mul(xx, yy);
+
+  vec4f tmp1 = v_mul(v_splat_z(bca), xxyy);
+  vec4f tmp2 = v_mul(v_splat_z(efd), xxyy);
+  // .xyzw
+  vec4f isect = v_madd(v_perm_xyab(bca, efd),
+    v_mul(v_perm_xyab(v_perm_yxxc(x0x1, x0x1), xx), v_perm_xyab(yy, v_perm_yxxc(y0y1, y0y1))), v_perm_xyab(tmp1, tmp2));
+
+  vec4f isect2010 = v_min(v_perm_zxyw(isect), v_rot_1(v_perm_ywyw(isect)));
+  vec4f isect1121 = v_max(v_perm_xzxz(isect), v_perm_ywyw(isect));
+  vec4f ret = v_cmp_ge(isect1121, isect2010);
+  return v_extract_xi(v_cast_vec4i(ret)) & v_extract_yi(v_cast_vec4i(ret));
+}
+
 
 //this is ~3 times faster for valid floats (not nans, infs, etc), than int(floorf())
 VECTORCALL VECMATH_INLINE  int vec_floori(float x)
