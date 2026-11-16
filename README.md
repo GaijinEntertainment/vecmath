@@ -153,6 +153,8 @@ void updateTurret(Turret &t, vec3f target, float turnFrac)
 - `_est` - fast hardware estimate refined toward useful precision.
 - `_unprecise` - raw hardware estimate; fastest, least precise.
 - `_safe` - tolerates edge inputs such as zero divisors.
+- `_xz` - result defined in `.x` and `.z` only (`v_muli_xz`).
+- `_nz` - result not specified in a lane where the sign operand is zero (`v_signi_nz`).
 - `v_ld` / `v_st` are aligned; `v_ldu` / `v_stu` are unaligned; a trailing `i` is
   the integer variant.
 - `v_cast_*` reinterprets the bits (free); `v_cvt_*` converts the value

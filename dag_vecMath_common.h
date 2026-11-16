@@ -21,7 +21,7 @@
 // Don't use that function to fix warnings like "heap use after free".
 NO_ASAN_INLINE vec3f v_ldu_p3(const float *m)
 {
-#if defined(DAGOR_TSAN_ENABLED) || defined(DAGOR_ASAN_ENABLED)
+#if defined(DAGOR_TSAN_ENABLED) || defined(DAGOR_ASAN_ENABLED) || defined(DAGOR_UBSAN_ENABLED)
   return v_ldu_p3_safe(m);
 #else
   return v_ldu(m);
@@ -29,7 +29,7 @@ NO_ASAN_INLINE vec3f v_ldu_p3(const float *m)
 }
 NO_ASAN_INLINE vec4i v_ldui_p3(const int *m)
 {
-#if defined(DAGOR_TSAN_ENABLED) || defined(DAGOR_ASAN_ENABLED)
+#if defined(DAGOR_TSAN_ENABLED) || defined(DAGOR_ASAN_ENABLED) || defined(DAGOR_UBSAN_ENABLED)
   return v_ldui_p3_safe(m);
 #else
   return v_ldui(m);

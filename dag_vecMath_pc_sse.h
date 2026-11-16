@@ -222,8 +222,6 @@ VECMATH_FINLINE void v_prefetch(const void *m) { _mm_prefetch((const char *)m, _
 VECTORCALL VECMATH_FINLINE vec4i v_cvt_lo_ush_vec4i(vec4i a) { return _mm_unpacklo_epi16(a, _mm_setzero_si128()); }
 VECTORCALL VECMATH_FINLINE vec4i v_cvt_hi_ush_vec4i(vec4i a) { return _mm_unpackhi_epi16(a, _mm_setzero_si128()); }
 VECTORCALL VECMATH_FINLINE vec4i
-  v_cvt_lo_ssh_vec4i(vec4i a) { vec4i sx = _mm_cmplt_epi16(a, _mm_setzero_si128()); return _mm_unpacklo_epi16(a, sx); }
-VECTORCALL VECMATH_FINLINE vec4i
   v_cvt_hi_ssh_vec4i(vec4i a) { vec4i sx = _mm_cmplt_epi16(a, _mm_setzero_si128()); return _mm_unpackhi_epi16(a, sx); }
 
 VECTORCALL VECMATH_FINLINE vec4i v_cvt_byte_vec4i(uint32_t a)
@@ -532,7 +530,10 @@ VECTORCALL VECMATH_FINLINE vec4i v_seli(vec4i a, vec4i b, vec4i c)
 {
   return _mm_castps_si128(_mm_blendv_ps(_mm_castsi128_ps(a), _mm_castsi128_ps(b), _mm_castsi128_ps(c)));
 }
+VECTORCALL VECMATH_FINLINE vec4i v_cvt_lo_ssh_vec4i(vec4i a) { return _mm_cvtepi16_epi32(a); }
 #else
+VECTORCALL VECMATH_FINLINE vec4i
+  v_cvt_lo_ssh_vec4i(vec4i a) { vec4i sx = _mm_cmplt_epi16(a, _mm_setzero_si128()); return _mm_unpacklo_epi16(a, sx); }
 VECTORCALL VECMATH_FINLINE vec4i v_cvt_floori(vec4f a) {return sse2_cvt_floori(a);}
 VECTORCALL VECMATH_FINLINE vec4i v_cvt_ceili(vec4f a) {return sse2_cvt_ceili(a);}
 VECTORCALL VECMATH_FINLINE vec4i v_cvt_trunci(vec4f a) { return v_cvti_vec4i(a); }
@@ -598,6 +599,7 @@ VECTORCALL VECMATH_FINLINE vec4i v_muli16(vec4i a, vec4i b) { return _mm_mullo_e
 VECTORCALL VECMATH_FINLINE vec4i v_mulhi16(vec4i a, vec4i b) { return _mm_mulhi_epi16(a, b); }
 VECTORCALL VECMATH_FINLINE vec4i v_madd_i16(vec4i a, vec4i b) { return _mm_madd_epi16(a, b); }
 VECTORCALL VECMATH_FINLINE vec4i v_splatsi16(int v) { return _mm_set1_epi16((int16_t)v); }
+VECTORCALL VECMATH_FINLINE vec4i v_srai16(vec4i v, int bits) { return _mm_srai_epi16(v, bits); }
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_lo_i8(vec4i a, vec4i b) { return _mm_unpacklo_epi8(a, b); }
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_hi_i8(vec4i a, vec4i b) { return _mm_unpackhi_epi8(a, b); }
 VECTORCALL VECMATH_FINLINE vec4i v_interleave_lo_i16(vec4i a, vec4i b) { return _mm_unpacklo_epi16(a, b); }
@@ -704,11 +706,24 @@ VECTORCALL VECMATH_FINLINE vec4i sse4_muli(vec4i a, vec4i b) { return sse2_muli(
 VECTORCALL VECMATH_FINLINE vec4i v_packus(vec4i a, vec4i b) { return sse4_packus(a, b); }
 VECTORCALL VECMATH_FINLINE vec4i v_packus(vec4i a) { return sse4_packus(a); }
 VECTORCALL VECMATH_FINLINE vec4i v_muli(vec4i a, vec4i b) { return sse4_muli(a,b); }
+VECTORCALL VECMATH_FINLINE vec4i v_signi_nz(vec4i a, vec4i b) { return _mm_sign_epi32(a, b); }
+VECTORCALL VECMATH_FINLINE vec4i v_signi16_nz(vec4i a, vec4i b) { return _mm_sign_epi16(a, b); }
 #else
+VECTORCALL VECMATH_FINLINE vec4i v_signi_nz(vec4i a, vec4i b)
+{
+  __m128i m = _mm_srai_epi32(b, 31);
+  return _mm_sub_epi32(_mm_xor_si128(a, m), m);
+}
+VECTORCALL VECMATH_FINLINE vec4i v_signi16_nz(vec4i a, vec4i b)
+{
+  __m128i m = _mm_srai_epi16(b, 15);
+  return _mm_sub_epi16(_mm_xor_si128(a, m), m);
+}
 VECTORCALL VECMATH_FINLINE vec4i v_packus(vec4i a, vec4i b) { return sse2_packus(a, b); }
 VECTORCALL VECMATH_FINLINE vec4i v_packus(vec4i a) { return sse2_packus(a); }
 VECTORCALL VECMATH_FINLINE vec4i v_muli(vec4i a, vec4i b) { return sse2_muli(a,b); }
 #endif
+VECTORCALL VECMATH_FINLINE vec4i v_muli_xz(vec4i a, vec4i b) { return _mm_mul_epu32(a, b); }
 
 VECTORCALL VECMATH_FINLINE vec4i v_packus16(vec4i a, vec4i b) { return _mm_packus_epi16(a,b); }
 VECTORCALL VECMATH_FINLINE vec4i v_packus16(vec4i a) { return _mm_packus_epi16(a,a); }

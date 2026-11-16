@@ -31,6 +31,8 @@ Double precision (`vec4d`, `vd_`) is a separate, rarely used corner; see `vec4d.
 | `_est` | estimate refined by Newton-Raphson steps; the sequence and count vary by op and ISA, for a similar useful precision. Not an automatic win (`microarch.md`) |
 | `_unprecise` | raw hardware estimate: fastest, least precise |
 | `_safe` | tolerates zero divisors or page-boundary loads |
+| `_xz` | only `.x` and `.z` are defined; `.y` and `.w` can hold anything (`v_muli_xz`) |
+| `_nz` | the result is not specified in a lane where the sign operand is zero (`v_signi_nz`, `v_signi16_nz`) |
 
 - Unsuffixed means precise and identical across platforms. Estimates are opt-in by name, never
   the default, because they are not bit-reproducible across ISAs. Defaults assume well-formed
@@ -52,7 +54,7 @@ Double precision (`vec4d`, `vd_`) is a separate, rarely used corner; see `vec4d.
   Point3 array without a storage change.
 - `v_ldu_p3` reads four floats for a packed Point3. It is fast and safe on the stack, but on the
   last element of a heap array that ends at a page end it faults: use `v_ldu_p3_safe` there
-  (reads exactly three). ASAN/TSAN route `v_ldu_p3` to the safe path, so sanitizers neither
+  (reads exactly three). ASAN/TSAN/UBSAN route `v_ldu_p3` to the safe path, so sanitizers neither
   catch nor reproduce the over-read. `v_ldui_p3`/`v_stu_p3` complete the family.
 - Store ports are scarcer than load ports (2-3 loads but only 1-2 stores per cycle on big cores),
   and `v_stu_p3` is two store uops (8 + 4 bytes). When the destination has intentional writable
@@ -148,11 +150,13 @@ usually favors SSE and loses on NEON.
   target has it (`__FMA__`, or AVX2 on MSVC). So the SSE4.1 PC build gets mul + add on every CPU.
   FMA rounds once, so a test like `a*b + c*d != 0` can differ between fused and unfused builds,
   and so between platforms.
-- Libs that need cross-ISA consistency (physJolt, gamePhys/collision, landMesh, rendInst) define
-  `VECMATH_NO_FMA` and build with x86 `-mno-fma`, `-fno-unsafe-math-optimizations` and
-  `-ffp-contract=off`. The define unfuses the explicit FMA of `v_madd` and its siblings on NEON
-  and x86; the flags stop compiler contraction (`-ffp-contract=off` alone is not enough under
-  fast math).
+- Libs that need cross-ISA consistency (physJolt, gamePhys/collision, landMesh, rendInst, daCSG
+  and daSurf through daCSG's `fp-options.jam`) define `VECMATH_NO_FMA` and, with GCC or Clang
+  (clang-cl through `/clang:`), build with `-fno-unsafe-math-optimizations`, `-ffp-contract=off`
+  and on x86 `-mno-fma`. MSVC has none of these flags: the other four keep the default `-fp:fast`;
+  daCSG and daSurf build with `-fp:precise` on Windows and Xbox, with either compiler.
+  The define unfuses the explicit FMA of `v_madd` and its siblings on NEON and x86;
+  the flags stop compiler contraction (`-ffp-contract=off` alone is not enough under fast math).
 - A difference of two products is where contraction bites: fuse one product, and `a*b - b*a`
   returns the rounding error of the other instead of 0. `v_cross3` prevents contraction on every
   build with multiplies that no compiler can fuse (`fmulx` on NEON; on FMA x86, muls that feed

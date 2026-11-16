@@ -421,6 +421,11 @@ VECTORCALL VECMATH_FINLINE vec4i v_addi(vec4i a, vec4i b);
 VECTORCALL VECMATH_FINLINE vec4i v_subi(vec4i a, vec4i b);
 //! (a * b), signed integers. result is only correctly defined if both operands and result is within [-1<<31, 1<<31) range
 VECTORCALL VECMATH_FINLINE vec4i v_muli(vec4i a, vec4i b);
+//! low 32 bits of (a * b) in .x and .z only, .y and .w are unspecified. One pmuludq on SSE, for a chain where pmulld is too slow
+VECTORCALL VECMATH_FINLINE vec4i v_muli_xz(vec4i a, vec4i b);
+//! a with the sign of b applied: a if b > 0, -a if b < 0 (-INT_MIN wraps to INT_MIN).
+//! Not specified for b == 0 (psignd gives 0, the other backends a)
+VECTORCALL VECMATH_FINLINE vec4i v_signi_nz(vec4i a, vec4i b);
 
 //! 8x16-bit packed integer addition
 VECTORCALL VECMATH_FINLINE vec4i v_addi16(vec4i a, vec4i b);
@@ -434,6 +439,10 @@ VECTORCALL VECMATH_FINLINE vec4i v_mulhi16(vec4i a, vec4i b);
 VECTORCALL VECMATH_FINLINE vec4i v_madd_i16(vec4i a, vec4i b);
 //! broadcast int16 value to all 8 16-bit lanes within vec4i
 VECTORCALL VECMATH_FINLINE vec4i v_splatsi16(int v);
+//! shift right (signed integer, 16-bit lanes). bits is immediate value
+VECTORCALL VECMATH_FINLINE vec4i v_srai16(vec4i v, int bits);
+//! 8x16-bit a with the sign of b applied: a if b > 0, -a if b < 0 (-(-32768) wraps to -32768). Not specified for b == 0, as v_signi_nz
+VECTORCALL VECMATH_FINLINE vec4i v_signi16_nz(vec4i a, vec4i b);
 
 //! shift left (unsigned integer, 32-bit lanes). bits is immediate value
 VECTORCALL VECMATH_FINLINE vec4i v_slli(vec4i v, int bits);

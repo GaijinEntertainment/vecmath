@@ -47,6 +47,12 @@ typedef const struct bsph3f& bsph3f_cref;
 # endif
 #endif
 
+#if defined(__has_feature)
+# if __has_feature(undefined_behavior_sanitizer)
+#   define DAGOR_UBSAN_ENABLED
+# endif
+#endif
+
 //if target is not defined, try to auto-detect target
 #if !defined(_TARGET_SIMD_SSE) && !defined(_TARGET_SIMD_SCALAR)
   #if __SSE4_1__ || defined(__AVX__) || defined(__AVX2__)

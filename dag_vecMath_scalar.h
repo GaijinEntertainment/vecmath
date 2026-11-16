@@ -396,6 +396,18 @@ VECMATH_FINLINE vec4i v_splatsi16(int v)
   uint16_t x[8]; for (int k = 0; k < 8; k++) x[k] = (uint16_t)v;
   vec4i r; memcpy(&r, x, 16); return r;
 }
+VECMATH_FINLINE vec4i v_srai16(vec4i v, int bits)
+{
+  int16_t x[8]; memcpy(x, &v, 16);
+  for (int k = 0; k < 8; k++) x[k] = (int16_t)(x[k] >> (bits > 15 ? 15 : bits));
+  vec4i r; memcpy(&r, x, 16); return r;
+}
+VECMATH_FINLINE vec4i v_signi16_nz(vec4i a, vec4i b)
+{
+  uint16_t x[8]; int16_t y[8]; memcpy(x, &a, 16); memcpy(y, &b, 16);
+  for (int k = 0; k < 8; k++) x[k] = y[k] < 0 ? (uint16_t)(0u - x[k]) : x[k];
+  vec4i r; memcpy(&r, x, 16); return r;
+}
 
 VECMATH_FINLINE vec4i scalar_interleave8(vec4i a, vec4i b, int base)
 {
@@ -512,6 +524,11 @@ VECMATH_FINLINE vec4i v_packus16(vec4i a) { return v_packus16(a, a); }
 VECMATH_FINLINE vec4i v_muli(vec4i a, vec4i b)
 {
   vec4i r; for (int k = 0; k < 4; k++) r.i[k] = (int32_t)((uint32_t)a.i[k] * (uint32_t)b.i[k]); return r;
+}
+VECMATH_FINLINE vec4i v_muli_xz(vec4i a, vec4i b) { return v_muli(a, b); }
+VECMATH_FINLINE vec4i v_signi_nz(vec4i a, vec4i b)
+{
+  vec4i r; for (int k = 0; k < 4; k++) r.i[k] = b.i[k] < 0 ? (int32_t)(0u - (uint32_t)a.i[k]) : a.i[k]; return r;
 }
 
 VECMATH_FINLINE vec4f v_rcp_unprecise(vec4f a)

@@ -435,7 +435,7 @@ VECMATH_FINLINE vec4d vd_cross3(vec4d a, vec4d b)
 // Same trade-off and the same sanitizer routing as v_ldu_p3 (see dag_vecMath_common.h).
 NO_ASAN_INLINE vec4d vd_ldu_p3(const double *m)
 {
-#if defined(DAGOR_TSAN_ENABLED) || defined(DAGOR_ASAN_ENABLED)
+#if defined(DAGOR_TSAN_ENABLED) || defined(DAGOR_ASAN_ENABLED) || defined(DAGOR_UBSAN_ENABLED)
   return vd_ldu_p3_safe(m);
 #else
   return vd_ldu(m);
